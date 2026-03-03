@@ -17,8 +17,11 @@ func TestMetricsIncrement(t *testing.T) {
 	m.IncReadOnlyBlocks("gate", "Deployment")
 	m.IncStatefulSetControlledAction("StatefulSet", "restart", "blocked", "frozen")
 	m.IncStatefulSetFreezeTriggers()
+	m.IncStatefulSetL2Result("success")
+	m.IncStatefulSetL2Result("fallback")
+	m.IncStatefulSetL2Result("degraded")
 	m.ObserveStrategyDuration("process", time.Second)
-	if m.Triggers != 1 || m.Success != 1 || m.Failures != 1 || m.Rollbacks != 1 || m.CircuitBreaks != 1 || m.MaintenanceWindowConflicts != 1 || m.Suppressed != 1 || m.ReadOnlyBlocks != 1 || m.StatefulSetFreezeTriggers != 1 {
+	if m.Triggers != 1 || m.Success != 1 || m.Failures != 1 || m.Rollbacks != 1 || m.CircuitBreaks != 1 || m.MaintenanceWindowConflicts != 1 || m.Suppressed != 1 || m.ReadOnlyBlocks != 1 || m.StatefulSetFreezeTriggers != 1 || m.StatefulSetL2Successes != 1 || m.StatefulSetL2Fallbacks != 1 || m.StatefulSetL2Degrades != 1 {
 		t.Fatalf("metrics counters not incremented")
 	}
 }

@@ -13,10 +13,13 @@ healingRequest:
     enabled: true
     readOnlyOnly: true
     controlledActionsEnabled: false
+    l2RollbackEnabled: false
     allowedNamespaces: []
     approvalAnnotation: kube-sentinel.io/statefulset-approved
     requireEvidence: true
     freezeWindowMinutes: 10
+    l2CandidateWindowMinutes: 30
+    l2MaxDegradeRatePercent: 10
   maintenanceWindows: []
   idempotencyWindowMinutes: 5
   soakTimePolicies:

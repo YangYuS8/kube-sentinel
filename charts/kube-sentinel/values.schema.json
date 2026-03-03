@@ -24,22 +24,32 @@
             "enabled": { "type": "boolean" },
             "readOnlyOnly": { "type": "boolean" },
             "controlledActionsEnabled": { "type": "boolean" },
+            "l2RollbackEnabled": { "type": "boolean" },
             "allowedNamespaces": {
               "type": "array",
               "items": { "type": "string", "minLength": 1 }
             },
             "approvalAnnotation": { "type": "string", "minLength": 1 },
             "requireEvidence": { "type": "boolean" },
-            "freezeWindowMinutes": { "type": "integer", "minimum": 1 }
+            "freezeWindowMinutes": { "type": "integer", "minimum": 1 },
+            "l2CandidateWindowMinutes": { "type": "integer", "minimum": 1 },
+            "l2MaxDegradeRatePercent": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
           },
           "required": [
             "enabled",
             "readOnlyOnly",
             "controlledActionsEnabled",
+            "l2RollbackEnabled",
             "allowedNamespaces",
             "approvalAnnotation",
             "requireEvidence",
-            "freezeWindowMinutes"
+            "freezeWindowMinutes",
+            "l2CandidateWindowMinutes",
+            "l2MaxDegradeRatePercent"
           ]
         },
         "maintenanceWindows": {

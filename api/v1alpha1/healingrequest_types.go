@@ -76,10 +76,13 @@ type StatefulSetPolicySpec struct {
 	Enabled                  bool     `json:"enabled,omitempty"`
 	ReadOnlyOnly             bool     `json:"readOnlyOnly,omitempty"`
 	ControlledActionsEnabled bool     `json:"controlledActionsEnabled,omitempty"`
+	L2RollbackEnabled        bool     `json:"l2RollbackEnabled,omitempty"`
 	AllowedNamespaces        []string `json:"allowedNamespaces,omitempty"`
 	ApprovalAnnotation       string   `json:"approvalAnnotation,omitempty"`
 	RequireEvidence          bool     `json:"requireEvidence,omitempty"`
 	FreezeWindowMinutes      int      `json:"freezeWindowMinutes,omitempty"`
+	L2CandidateWindowMinutes int      `json:"l2CandidateWindowMinutes,omitempty"`
+	L2MaxDegradeRatePercent  int      `json:"l2MaxDegradeRatePercent,omitempty"`
 }
 
 type HealingRequestSpec struct {
@@ -112,6 +115,10 @@ type HealingRequestStatus struct {
 	StatefulSetFreezeState   string               `json:"statefulSetFreezeState,omitempty"`
 	StatefulSetFreezeUntil   string               `json:"statefulSetFreezeUntil,omitempty"`
 	StatefulSetFailureReason string               `json:"statefulSetFailureReason,omitempty"`
+	StatefulSetL2Candidate   string               `json:"statefulSetL2Candidate,omitempty"`
+	StatefulSetL2Decision    string               `json:"statefulSetL2Decision,omitempty"`
+	StatefulSetL2Result      string               `json:"statefulSetL2Result,omitempty"`
+	NextRecommendation       string               `json:"nextRecommendation,omitempty"`
 	BlockReasonCode          string               `json:"blockReasonCode,omitempty"`
 	LastAction               string               `json:"lastAction,omitempty"`
 	LastError                string               `json:"lastError,omitempty"`
@@ -223,6 +230,12 @@ func (r *HealingRequest) ApplyDefaults() {
 	if r.Spec.StatefulSetPolicy.FreezeWindowMinutes == 0 {
 		r.Spec.StatefulSetPolicy.FreezeWindowMinutes = 10
 	}
+	if r.Spec.StatefulSetPolicy.L2CandidateWindowMinutes == 0 {
+		r.Spec.StatefulSetPolicy.L2CandidateWindowMinutes = 30
+	}
+	if r.Spec.StatefulSetPolicy.L2MaxDegradeRatePercent == 0 {
+		r.Spec.StatefulSetPolicy.L2MaxDegradeRatePercent = 10
+	}
 	if r.Spec.Workload.Kind == "StatefulSet" {
 		if len(r.Spec.StatefulSetPolicy.AllowedNamespaces) == 0 {
 			r.Spec.StatefulSetPolicy.AllowedNamespaces = []string{r.Spec.Workload.Namespace}
@@ -281,6 +294,12 @@ func (r *HealingRequest) Validate() error {
 	}
 	if r.Spec.StatefulSetPolicy.FreezeWindowMinutes < 1 {
 		return fmt.Errorf("statefulSetPolicy.freezeWindowMinutes must be >= 1")
+	}
+	if r.Spec.StatefulSetPolicy.L2CandidateWindowMinutes < 1 {
+		return fmt.Errorf("statefulSetPolicy.l2CandidateWindowMinutes must be >= 1")
+	}
+	if r.Spec.StatefulSetPolicy.L2MaxDegradeRatePercent < 1 || r.Spec.StatefulSetPolicy.L2MaxDegradeRatePercent > 100 {
+		return fmt.Errorf("statefulSetPolicy.l2MaxDegradeRatePercent must be between 1 and 100")
 	}
 	if r.Spec.Workload.Kind == "StatefulSet" {
 		if len(r.Spec.StatefulSetPolicy.AllowedNamespaces) == 0 {

@@ -297,28 +297,19 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 			req.Status.LastEventReason = "snapshot-failed"
 			return err
 		}
-		o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now(), req.Spec.IdempotencyWindowMinutes)
+		o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name+"/l1", o.Now(), req.Spec.IdempotencyWindowMinutes)
 		if err := o.Adapter.ExecuteStatefulSetControlledAction(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name, "restart"); err != nil {
-			_ = o.Snapshotter.Restore(snap)
-			freezeUntil := o.Now().Add(time.Duration(req.Spec.StatefulSetPolicy.FreezeWindowMinutes) * time.Minute)
-			req.Status.Phase = ksv1alpha1.PhaseBlocked
-			req.Status.LastError = "statefulset controlled action failed; fallback to read-only"
-			req.Status.BlockReasonCode = "statefulset_action_failed"
-			req.Status.LastAction = "manual-intervention"
-			req.Status.LastEventReason = "statefulset-action-failed"
-			req.Status.StatefulSetFreezeState = "frozen"
-			req.Status.StatefulSetFreezeUntil = freezeUntil.Format(time.RFC3339)
+			req.Status.Phase = ksv1alpha1.PhaseL2
+			req.Status.StatefulSetL2Decision = "entered-l2-after-l1-failure"
 			req.Status.StatefulSetFailureReason = err.Error()
-			req.Status.ShadowAction = "statefulset controlled action failed; switched to read-only until manual unlock"
+			req.Status.LastEventReason = "statefulset-l1-failed"
+			req.Status.LastAction = "statefulset-controlled-restart"
 			if o.Metrics != nil {
 				o.Metrics.IncFailures()
-				o.Metrics.IncReadOnlyBlocks("statefulset_action_failed", req.Spec.Workload.Kind)
-				o.Metrics.IncStatefulSetControlledAction(req.Spec.Workload.Kind, "restart", "fallback", "frozen")
-				o.Metrics.IncStatefulSetFreezeTriggers()
+				o.Metrics.IncStatefulSetControlledAction(req.Spec.Workload.Kind, "restart", "failed", req.Status.StatefulSetFreezeState)
 			}
-			o.emitRuntimeEvent(req, "Warning", "StatefulSetActionFailed", err.Error())
-			o.writeAudit(req, "failed", "statefulset controlled action failed and restored snapshot")
-			return err
+			o.emitRuntimeEvent(req, "Warning", "StatefulSetL1Failed", err.Error())
+			return o.processStatefulSetL2(ctx, req, runtimeInput, snap)
 		}
 		req.Status.Phase = ksv1alpha1.PhaseCompleted
 		req.Status.LastAction = "statefulset-controlled-restart"
@@ -332,6 +323,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 			o.Metrics.IncSuccess()
 			o.Metrics.IncStatefulSetControlledAction(req.Spec.Workload.Kind, "restart", "executed", "none")
 		}
+		o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now(), req.Spec.RateLimit.WindowMinutes)
 		o.emitRuntimeEvent(req, "Normal", "StatefulSetControlledActionSucceeded", "statefulset controlled restart executed")
 		o.writeAudit(req, "success", "statefulset controlled restart executed")
 		return nil
@@ -532,6 +524,7 @@ func (o *Orchestrator) writeAudit(req *ksv1alpha1.HealingRequest, result, afterS
 		Target:       req.Spec.Workload.Namespace + "/" + req.Spec.Workload.Name,
 		WorkloadKind: req.Spec.Workload.Kind,
 		ActionType:   req.Status.LastAction,
+		Phase:        string(req.Status.Phase),
 		Decision:     req.Status.LastGateDecision,
 		FreezeState:  req.Status.StatefulSetFreezeState,
 		BeforeState:  req.Status.LastEventReason,
@@ -667,4 +660,161 @@ func isStatefulSetFrozen(req *ksv1alpha1.HealingRequest, now time.Time) (bool, s
 	req.Status.StatefulSetFreezeState = "none"
 	req.Status.StatefulSetFreezeUntil = ""
 	return false, ""
+}
+
+func (o *Orchestrator) processStatefulSetL2(ctx context.Context, req *ksv1alpha1.HealingRequest, runtimeInput RuntimeInput, snapshot Snapshot) error {
+	if !req.Spec.StatefulSetPolicy.L2RollbackEnabled {
+		req.Status.Phase = ksv1alpha1.PhaseL3
+		req.Status.StatefulSetL2Result = "degraded"
+		req.Status.StatefulSetL2Decision = "l2-disabled"
+		req.Status.LastEvidenceStatus = "insufficient-evidence"
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastError = "statefulset l2 rollback is disabled; degraded to manual intervention"
+		req.Status.LastEventReason = "statefulset-l2-disabled"
+		req.Status.NextRecommendation = "enable statefulSetPolicy.l2RollbackEnabled to allow L2 rollback"
+		if o.Metrics != nil {
+			o.Metrics.IncStatefulSetL2Result("degraded")
+		}
+		o.emitRuntimeEvent(req, "Warning", "StatefulSetL2Degraded", req.Status.LastError)
+		o.writeAudit(req, "fallback", req.Status.LastError)
+		return nil
+	}
+	if o.actionsInWindow(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name+"/l2", o.Now(), req.Spec.IdempotencyWindowMinutes) > 0 {
+		req.Status.Phase = ksv1alpha1.PhaseBlocked
+		req.Status.StatefulSetL2Result = "fallback"
+		req.Status.StatefulSetL2Decision = "blocked-by-idempotency-window"
+		req.Status.LastError = "statefulset l2 rollback blocked by idempotency window"
+		req.Status.BlockReasonCode = "statefulset_l2_idempotency_window"
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastEventReason = "statefulset-l2-idempotency-blocked"
+		req.Status.NextRecommendation = "wait for idempotency window or manually intervene"
+		if o.Metrics != nil {
+			o.Metrics.IncFailures()
+			o.Metrics.IncReadOnlyBlocks("statefulset_l2_idempotency_window", req.Spec.Workload.Kind)
+			o.Metrics.IncStatefulSetControlledAction(req.Spec.Workload.Kind, "l2_rollback", "blocked", req.Status.StatefulSetFreezeState)
+			o.Metrics.IncStatefulSetL2Result("fallback")
+		}
+		o.emitRuntimeEvent(req, "Warning", "StatefulSetL2IdempotencyBlocked", req.Status.LastError)
+		o.writeAudit(req, "blocked", req.Status.LastError)
+		return errors.New(req.Status.LastError)
+	}
+	if req.Spec.StatefulSetPolicy.RequireEvidence && runtimeInput.ClusterPods < 1 {
+		req.Status.Phase = ksv1alpha1.PhaseL3
+		req.Status.StatefulSetL2Result = "degraded"
+		req.Status.StatefulSetL2Decision = "insufficient-runtime-evidence"
+		req.Status.LastEvidenceStatus = "insufficient-evidence"
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastError = "statefulset runtime evidence is insufficient for L2 rollback"
+		req.Status.LastEventReason = "statefulset-l2-evidence-insufficient"
+		req.Status.NextRecommendation = "stabilize workload evidence and retry"
+		if o.Metrics != nil {
+			o.Metrics.IncStatefulSetL2Result("degraded")
+		}
+		o.emitRuntimeEvent(req, "Warning", "StatefulSetL2Degraded", req.Status.LastError)
+		o.writeAudit(req, "fallback", req.Status.LastError)
+		return nil
+	}
+	revisions, err := o.Adapter.ListRevisions(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name)
+	if err != nil {
+		req.Status.Phase = ksv1alpha1.PhaseL3
+		req.Status.StatefulSetL2Result = "degraded"
+		req.Status.StatefulSetL2Decision = "revision-list-failed"
+		req.Status.LastEvidenceStatus = "insufficient-evidence"
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastError = fmt.Sprintf("statefulset l2 revision list failed: %v", err)
+		req.Status.LastEventReason = "statefulset-l2-revision-list-failed"
+		req.Status.NextRecommendation = "verify statefulset revision history"
+		if o.Metrics != nil {
+			o.Metrics.IncFailures()
+			o.Metrics.IncStatefulSetL2Result("degraded")
+		}
+		o.emitRuntimeEvent(req, "Warning", "StatefulSetL2Degraded", req.Status.LastError)
+		o.writeAudit(req, "fallback", req.Status.LastError)
+		return nil
+	}
+	latest, err := SelectLatestHealthyRevision(revisions)
+	if err != nil {
+		req.Status.Phase = ksv1alpha1.PhaseL3
+		req.Status.StatefulSetL2Result = "degraded"
+		req.Status.StatefulSetL2Decision = "no-healthy-candidate"
+		req.Status.LastEvidenceStatus = "insufficient-evidence"
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastError = "statefulset no healthy revision available; degraded to manual intervention"
+		req.Status.LastEventReason = "statefulset-l2-no-candidate"
+		req.Status.NextRecommendation = "inspect healthy revision evidence and alert history"
+		if o.Metrics != nil {
+			o.Metrics.IncStatefulSetL2Result("degraded")
+		}
+		o.emitRuntimeEvent(req, "Warning", "StatefulSetL2Degraded", req.Status.LastError)
+		o.writeAudit(req, "fallback", req.Status.LastError)
+		return nil
+	}
+	req.Status.StatefulSetL2Candidate = latest.Revision
+	req.Status.LastEvidenceStatus = "statefulset-l2-candidate-selected"
+	if err := o.Adapter.ValidateRevisionDependencies(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name, latest.Revision); err != nil {
+		req.Status.Phase = ksv1alpha1.PhaseL3
+		req.Status.StatefulSetL2Result = "degraded"
+		req.Status.StatefulSetL2Decision = "dependency-validation-failed"
+		req.Status.LastEvidenceStatus = "insufficient-evidence"
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastError = "statefulset revision dependencies unavailable; degraded to manual intervention"
+		req.Status.LastEventReason = "statefulset-l2-dependency-missing"
+		req.Status.NextRecommendation = "restore missing dependencies and retry"
+		if o.Metrics != nil {
+			o.Metrics.IncFailures()
+			o.Metrics.IncReadOnlyBlocks("statefulset_l2_dependency", req.Spec.Workload.Kind)
+			o.Metrics.IncStatefulSetL2Result("degraded")
+		}
+		o.emitRuntimeEvent(req, "Warning", "StatefulSetL2Degraded", req.Status.LastError)
+		o.writeAudit(req, "fallback", req.Status.LastError)
+		return nil
+	}
+	o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name+"/l2", o.Now(), req.Spec.IdempotencyWindowMinutes)
+	if err := o.Adapter.RollbackToRevision(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name, latest.Revision); err != nil {
+		_ = o.Snapshotter.Restore(snapshot)
+		freezeUntil := o.Now().Add(time.Duration(req.Spec.StatefulSetPolicy.FreezeWindowMinutes) * time.Minute)
+		req.Status.Phase = ksv1alpha1.PhaseBlocked
+		req.Status.StatefulSetL2Result = "fallback"
+		req.Status.StatefulSetL2Decision = "rollback-failed"
+		req.Status.LastError = "statefulset l2 rollback failed; fallback to read-only"
+		req.Status.BlockReasonCode = "statefulset_l2_rollback_failed"
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastEventReason = "statefulset-l2-rollback-failed"
+		req.Status.StatefulSetFreezeState = "frozen"
+		req.Status.StatefulSetFreezeUntil = freezeUntil.Format(time.RFC3339)
+		req.Status.StatefulSetFailureReason = err.Error()
+		req.Status.NextRecommendation = "manual intervention required before unlocking freeze"
+		if o.Metrics != nil {
+			o.Metrics.IncFailures()
+			o.Metrics.IncReadOnlyBlocks("statefulset_l2_rollback_failed", req.Spec.Workload.Kind)
+			o.Metrics.IncStatefulSetControlledAction(req.Spec.Workload.Kind, "l2_rollback", "fallback", "frozen")
+			o.Metrics.IncStatefulSetFreezeTriggers()
+			o.Metrics.IncStatefulSetL2Result("fallback")
+		}
+		o.emitRuntimeEvent(req, "Warning", "StatefulSetL2RollbackFailed", err.Error())
+		o.writeAudit(req, "failed", "statefulset l2 rollback failed and restored snapshot")
+		return err
+	}
+	req.Status.Phase = ksv1alpha1.PhaseCompleted
+	req.Status.StatefulSetL2Result = "success"
+	req.Status.StatefulSetL2Decision = "rollback-succeeded"
+	req.Status.LastAction = "statefulset-l2-rollback-to-healthy"
+	req.Status.LastHealthyRevision = latest.Revision
+	req.Status.LastEventReason = "statefulset-l2-rollback-succeeded"
+	req.Status.LastEvidenceStatus = "statefulset-l2-rollback-succeeded"
+	req.Status.StatefulSetFailureReason = ""
+	req.Status.StatefulSetFreezeState = "none"
+	req.Status.StatefulSetFreezeUntil = ""
+	req.Status.NextRecommendation = "continue observing post-rollback stability"
+	req.Status.ObservedGeneration = req.Generation
+	if o.Metrics != nil {
+		o.Metrics.IncRollbacks()
+		o.Metrics.IncSuccess()
+		o.Metrics.IncStatefulSetControlledAction(req.Spec.Workload.Kind, "l2_rollback", "executed", "none")
+		o.Metrics.IncStatefulSetL2Result("success")
+	}
+	o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now(), req.Spec.RateLimit.WindowMinutes)
+	o.emitRuntimeEvent(req, "Normal", "StatefulSetL2RollbackSucceeded", "statefulset l2 rollback executed")
+	o.writeAudit(req, "success", "statefulset l2 rollback executed")
+	return nil
 }

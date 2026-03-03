@@ -45,6 +45,12 @@ func TestValidateAllowsStatefulSet(t *testing.T) {
 	if r.Spec.StatefulSetPolicy.FreezeWindowMinutes < 1 {
 		t.Fatalf("expected freeze window default")
 	}
+	if r.Spec.StatefulSetPolicy.L2CandidateWindowMinutes < 1 {
+		t.Fatalf("expected l2 candidate window default")
+	}
+	if r.Spec.StatefulSetPolicy.L2MaxDegradeRatePercent < 1 {
+		t.Fatalf("expected l2 max degrade rate default")
+	}
 	if len(r.Spec.StatefulSetPolicy.AllowedNamespaces) != 1 || r.Spec.StatefulSetPolicy.AllowedNamespaces[0] != "default" {
 		t.Fatalf("expected allowed namespace default to workload namespace")
 	}
@@ -105,5 +111,15 @@ func TestValidateStatefulSetPolicyBoundaries(t *testing.T) {
 	r.Spec.StatefulSetPolicy.ApprovalAnnotation = ""
 	if err := r.Validate(); err == nil {
 		t.Fatalf("expected approval annotation validation error")
+	}
+	r.Spec.StatefulSetPolicy.ApprovalAnnotation = "kube-sentinel.io/statefulset-approved"
+	r.Spec.StatefulSetPolicy.L2CandidateWindowMinutes = 0
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected l2 candidate window validation error")
+	}
+	r.Spec.StatefulSetPolicy.L2CandidateWindowMinutes = 30
+	r.Spec.StatefulSetPolicy.L2MaxDegradeRatePercent = 101
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected l2 max degrade rate validation error")
 	}
 }

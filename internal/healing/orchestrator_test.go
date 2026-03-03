@@ -422,6 +422,7 @@ func TestOrchestratorStatefulSetControlledActionAuthorized(t *testing.T) {
 	req.Spec.StatefulSetPolicy.Enabled = true
 	req.Spec.StatefulSetPolicy.ReadOnlyOnly = false
 	req.Spec.StatefulSetPolicy.ControlledActionsEnabled = true
+	req.Spec.StatefulSetPolicy.L2RollbackEnabled = true
 	req.Spec.StatefulSetPolicy.RequireEvidence = false
 	req.Spec.StatefulSetPolicy.ApprovalAnnotation = "kube-sentinel.io/statefulset-approved"
 	req.Spec.StatefulSetPolicy.AllowedNamespaces = []string{"default"}
@@ -459,6 +460,7 @@ func TestOrchestratorStatefulSetControlledActionFailureFreeze(t *testing.T) {
 	req.Spec.StatefulSetPolicy.Enabled = true
 	req.Spec.StatefulSetPolicy.ReadOnlyOnly = false
 	req.Spec.StatefulSetPolicy.ControlledActionsEnabled = true
+	req.Spec.StatefulSetPolicy.L2RollbackEnabled = true
 	req.Spec.StatefulSetPolicy.RequireEvidence = false
 	req.Spec.StatefulSetPolicy.ApprovalAnnotation = "kube-sentinel.io/statefulset-approved"
 	req.Spec.StatefulSetPolicy.AllowedNamespaces = []string{"default"}
@@ -468,7 +470,12 @@ func TestOrchestratorStatefulSetControlledActionFailureFreeze(t *testing.T) {
 	}
 	now := time.Unix(1000, 0)
 	o := &Orchestrator{
-		Adapter:     fakeAdapter{supports: true, statefulSetActionErr: errors.New("restart failed")},
+		Adapter: fakeAdapter{
+			supports:             true,
+			statefulSetActionErr: errors.New("restart failed"),
+			revisions:            []RevisionRecord{{Revision: "rev-a", UnixTime: 10, Healthy: true}},
+			rollbackErr:          errors.New("rollback failed"),
+		},
 		Snapshotter: &MemorySnapshotter{},
 		RuntimeInputProvider: fakeRuntimeInputProvider{input: RuntimeInput{
 			AffectedPods:       1,
@@ -485,6 +492,9 @@ func TestOrchestratorStatefulSetControlledActionFailureFreeze(t *testing.T) {
 	if req.Status.StatefulSetFreezeState != "frozen" || req.Status.StatefulSetFreezeUntil == "" {
 		t.Fatalf("expected freeze state after failure")
 	}
+	if req.Status.StatefulSetL2Result != "fallback" {
+		t.Fatalf("expected l2 fallback result")
+	}
 	req2 := newReq()
 	req2.Spec.Workload = req.Spec.Workload
 	req2.Spec.StatefulSetPolicy = req.Spec.StatefulSetPolicy
@@ -496,6 +506,97 @@ func TestOrchestratorStatefulSetControlledActionFailureFreeze(t *testing.T) {
 	}
 	if req2.Status.BlockReasonCode != "statefulset_frozen" {
 		t.Fatalf("expected statefulset_frozen block code")
+	}
+}
+
+func TestOrchestratorStatefulSetL2RollbackSuccessAfterL1Failure(t *testing.T) {
+	req := newReq()
+	req.Spec.Workload.Kind = "StatefulSet"
+	req.Spec.StatefulSetPolicy.Enabled = true
+	req.Spec.StatefulSetPolicy.ReadOnlyOnly = false
+	req.Spec.StatefulSetPolicy.ControlledActionsEnabled = true
+	req.Spec.StatefulSetPolicy.L2RollbackEnabled = true
+	req.Spec.StatefulSetPolicy.RequireEvidence = false
+	req.Spec.StatefulSetPolicy.ApprovalAnnotation = "kube-sentinel.io/statefulset-approved"
+	req.Spec.StatefulSetPolicy.AllowedNamespaces = []string{"default"}
+	req.Annotations = map[string]string{"kube-sentinel.io/statefulset-approved": "true"}
+	o := &Orchestrator{
+		Adapter: fakeAdapter{
+			supports:             true,
+			statefulSetActionErr: errors.New("restart failed"),
+			revisions:            []RevisionRecord{{Revision: "rev-ok", UnixTime: 100, Healthy: true}},
+		},
+		Snapshotter:          &MemorySnapshotter{},
+		RuntimeInputProvider: fakeRuntimeInputProvider{input: RuntimeInput{AffectedPods: 1, ClusterPods: 100, TotalWorkloads: 10, UnhealthyWorkloads: 1}},
+		Metrics:              &observability.Metrics{},
+	}
+	if err := o.Process(context.Background(), req); err != nil {
+		t.Fatalf("expected l2 rollback success after l1 failure: %v", err)
+	}
+	if req.Status.Phase != ksv1alpha1.PhaseCompleted || req.Status.StatefulSetL2Result != "success" {
+		t.Fatalf("expected phase completed with l2 success")
+	}
+	if req.Status.LastHealthyRevision != "rev-ok" {
+		t.Fatalf("expected l2 selected healthy revision")
+	}
+}
+
+func TestOrchestratorStatefulSetL2DegradeWhenNoCandidate(t *testing.T) {
+	req := newReq()
+	req.Spec.Workload.Kind = "StatefulSet"
+	req.Spec.StatefulSetPolicy.Enabled = true
+	req.Spec.StatefulSetPolicy.ReadOnlyOnly = false
+	req.Spec.StatefulSetPolicy.ControlledActionsEnabled = true
+	req.Spec.StatefulSetPolicy.L2RollbackEnabled = true
+	req.Spec.StatefulSetPolicy.RequireEvidence = false
+	req.Spec.StatefulSetPolicy.ApprovalAnnotation = "kube-sentinel.io/statefulset-approved"
+	req.Spec.StatefulSetPolicy.AllowedNamespaces = []string{"default"}
+	req.Annotations = map[string]string{"kube-sentinel.io/statefulset-approved": "true"}
+	o := &Orchestrator{
+		Adapter: fakeAdapter{
+			supports:             true,
+			statefulSetActionErr: errors.New("restart failed"),
+			revisions:            []RevisionRecord{{Revision: "rev-bad", UnixTime: 10, Healthy: false}},
+		},
+		Snapshotter:          &MemorySnapshotter{},
+		RuntimeInputProvider: fakeRuntimeInputProvider{input: RuntimeInput{AffectedPods: 1, ClusterPods: 100, TotalWorkloads: 10, UnhealthyWorkloads: 1}},
+	}
+	if err := o.Process(context.Background(), req); err != nil {
+		t.Fatalf("expected l2 no-candidate degrade without hard error: %v", err)
+	}
+	if req.Status.Phase != ksv1alpha1.PhaseL3 || req.Status.StatefulSetL2Result != "degraded" {
+		t.Fatalf("expected l3 degraded when no healthy candidate")
+	}
+}
+
+func TestOrchestratorStatefulSetL2IdempotencyBlocked(t *testing.T) {
+	req := newReq()
+	req.Spec.Workload.Kind = "StatefulSet"
+	req.Spec.StatefulSetPolicy.Enabled = true
+	req.Spec.StatefulSetPolicy.ReadOnlyOnly = false
+	req.Spec.StatefulSetPolicy.ControlledActionsEnabled = true
+	req.Spec.StatefulSetPolicy.L2RollbackEnabled = true
+	req.Spec.StatefulSetPolicy.RequireEvidence = false
+	req.Spec.StatefulSetPolicy.ApprovalAnnotation = "kube-sentinel.io/statefulset-approved"
+	req.Spec.StatefulSetPolicy.AllowedNamespaces = []string{"default"}
+	req.Annotations = map[string]string{"kube-sentinel.io/statefulset-approved": "true"}
+	now := time.Unix(2000, 0)
+	o := &Orchestrator{
+		Adapter: fakeAdapter{
+			supports:             true,
+			statefulSetActionErr: errors.New("restart failed"),
+			revisions:            []RevisionRecord{{Revision: "rev-ok", UnixTime: 100, Healthy: true}},
+		},
+		Snapshotter:          &MemorySnapshotter{},
+		RuntimeInputProvider: fakeRuntimeInputProvider{input: RuntimeInput{AffectedPods: 1, ClusterPods: 100, TotalWorkloads: 10, UnhealthyWorkloads: 1}},
+		Now:                  func() time.Time { return now },
+	}
+	o.actionHistory = map[string][]time.Time{req.Spec.Workload.Namespace + "/" + req.Spec.Workload.Name + "/l2": {now.Add(-time.Minute)}}
+	if err := o.Process(context.Background(), req); err == nil {
+		t.Fatalf("expected l2 idempotency block")
+	}
+	if req.Status.BlockReasonCode != "statefulset_l2_idempotency_window" {
+		t.Fatalf("expected l2 idempotency block reason")
 	}
 }
 

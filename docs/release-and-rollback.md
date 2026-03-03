@@ -12,6 +12,8 @@
 8. 启用 StatefulSet 接入时，先确认默认仅 `read-only`，阻断原因包含 `statefulset_readonly`。
 9. 启用 StatefulSet Phase 2 时，必须同时配置：`controlledActionsEnabled=true`、`allowedNamespaces`、`approvalAnnotation`、`freezeWindowMinutes`。
 10. 灰度期间必须观测以下阈值：误动作率 < 1%、回退率 < 5%、冻结触发率 < 5%。任一越线立即回退只读。
+11. 启用 StatefulSet Phase 3（L2）时，必须同时开启 `statefulSetPolicy.l2RollbackEnabled=true`，并校验 L2 候选窗口与降级阈值参数。
+12. Phase 3 灰度期间重点观测：L2 成功率、L2 失败回退率、L2 降级率；任一连续窗口越线应关闭 L2。
 
 ## 风险
 
@@ -22,6 +24,8 @@
 - 命名空间预算阈值配置不当导致过度只读阻断（需结合业务基数调参）。
 - StatefulSet 受控动作授权链路不完整导致误动作（需同时满足开关、白名单、审批、证据链）。
 - StatefulSet 动作失败后未冻结导致重复扰动（需验证 `statefulSetFreezeState=frozen` 与 `statefulSetFreezeUntil`）。
+- StatefulSet L2 候选筛选不稳定导致频繁降级 L3（需结合候选窗口参数调优）。
+- StatefulSet L2 回滚失败恢复路径异常（需验证 snapshot restore 与冻结联动）。
 
 ## 回滚步骤
 
@@ -33,6 +37,7 @@
 6. 关闭保守模式预算阻断与白名单尝试权，恢复基础门禁策略。
 7. 将 `statefulSetPolicy.controlledActionsEnabled=false` 且 `statefulSetPolicy.readOnlyOnly=true`，回退到只读策略。
 8. 清理审批注解 `kube-sentinel.io/statefulset-approved`，避免误触发下一轮自动动作。
+9. 将 `statefulSetPolicy.l2RollbackEnabled=false`，回退到 Phase 2（仅 L1 受控 + L3 人工）模式。
 
 ## 应急步骤
 

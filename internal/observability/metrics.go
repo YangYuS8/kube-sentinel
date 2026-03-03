@@ -18,6 +18,9 @@ type Metrics struct {
 	Suppressed                 uint64
 	ReadOnlyBlocks             uint64
 	StatefulSetFreezeTriggers  uint64
+	StatefulSetL2Successes     uint64
+	StatefulSetL2Fallbacks     uint64
+	StatefulSetL2Degrades      uint64
 }
 
 var (
@@ -63,6 +66,10 @@ var (
 		Name: "kube_sentinel_statefulset_freeze_triggers_total",
 		Help: "Total number of StatefulSet freeze triggers.",
 	})
+	statefulSetL2ResultCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kube_sentinel_statefulset_l2_results_total",
+		Help: "Total number of StatefulSet L2 rollback results by result type.",
+	}, []string{"result"})
 	strategyDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "kube_sentinel_strategy_duration_seconds",
 		Help:    "Duration of healing strategy execution.",
@@ -83,6 +90,7 @@ func registerPrometheusMetrics() {
 			readOnlyBlocksCounter,
 			statefulSetControlledActionCounter,
 			statefulSetFreezeTriggersCounter,
+			statefulSetL2ResultCounter,
 			strategyDurationHistogram,
 		)
 	})
@@ -158,6 +166,22 @@ func (m *Metrics) IncStatefulSetFreezeTriggers() {
 	registerPrometheusMetrics()
 	atomic.AddUint64(&m.StatefulSetFreezeTriggers, 1)
 	statefulSetFreezeTriggersCounter.Inc()
+}
+
+func (m *Metrics) IncStatefulSetL2Result(result string) {
+	registerPrometheusMetrics()
+	if result == "" {
+		result = "unknown"
+	}
+	switch result {
+	case "success":
+		atomic.AddUint64(&m.StatefulSetL2Successes, 1)
+	case "fallback":
+		atomic.AddUint64(&m.StatefulSetL2Fallbacks, 1)
+	case "degraded":
+		atomic.AddUint64(&m.StatefulSetL2Degrades, 1)
+	}
+	statefulSetL2ResultCounter.WithLabelValues(result).Inc()
 }
 
 func (m *Metrics) ObserveStrategyDuration(stage string, duration time.Duration) {
