@@ -48,8 +48,8 @@ func main() {
 
 	auditSink := &observability.MemoryAuditSink{}
 	receiver := &ingestion.Receiver{
-		Client:   mgr.GetClient(),
-		Dedupe:   ingestion.NewMemoryDedupeStore(),
+		Client:    mgr.GetClient(),
+		Dedupe:    ingestion.NewMemoryDedupeStore(),
 		AuditSink: auditSink,
 	}
 	http.HandleFunc("/alertmanager/webhook", receiver.HandleWebhook)

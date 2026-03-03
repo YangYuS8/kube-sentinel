@@ -10,7 +10,7 @@ type DedupeStore interface {
 }
 
 type MemoryDedupeStore struct {
-	mu sync.Mutex
+	mu   sync.Mutex
 	seen map[string]time.Time
 }
 

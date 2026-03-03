@@ -12,10 +12,10 @@ type Alert struct {
 }
 
 type Event struct {
-	Fingerprint string
+	Fingerprint    string
 	CorrelationKey string
-	WorkloadKind string
-	Namespace string
-	Name string
-	Reason string
+	WorkloadKind   string
+	Namespace      string
+	Name           string
+	Reason         string
 }

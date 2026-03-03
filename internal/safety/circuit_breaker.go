@@ -18,12 +18,12 @@ type BreakerStatus struct {
 }
 
 type CircuitBreaker struct {
-	mu               sync.Mutex
-	objectThreshold  int
-	domainThreshold  int
-	cooldown         time.Duration
-	objectStates     map[string]breakerState
-	domainState      breakerState
+	mu              sync.Mutex
+	objectThreshold int
+	domainThreshold int
+	cooldown        time.Duration
+	objectStates    map[string]breakerState
+	domainState     breakerState
 }
 
 func NewCircuitBreaker(objectThreshold, domainThreshold, cooldownMinutes int) *CircuitBreaker {
