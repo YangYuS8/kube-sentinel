@@ -14,15 +14,17 @@ import (
 )
 
 type fakeAdapter struct {
-	supports           bool
-	revisions          []RevisionRecord
-	listErr            error
-	rollbackErr        error
-	dependencyErr      error
-	affectedPods       int
-	clusterPods        int
-	totalWorkloads     int
-	unhealthyWorkloads int
+	supports               bool
+	revisions              []RevisionRecord
+	listErr                error
+	rollbackErr            error
+	dependencyErr          error
+	statefulSetActionErr   error
+	statefulSetEvidenceErr error
+	affectedPods           int
+	clusterPods            int
+	totalWorkloads         int
+	unhealthyWorkloads     int
 }
 
 func (f fakeAdapter) Kind() string { return "Deployment" }
@@ -34,6 +36,12 @@ func (f fakeAdapter) ListRevisions(_ context.Context, _, _ string) ([]RevisionRe
 }
 func (f fakeAdapter) RollbackToRevision(_ context.Context, _, _, _ string) error {
 	return f.rollbackErr
+}
+func (f fakeAdapter) ExecuteStatefulSetControlledAction(_ context.Context, _, _, _ string) error {
+	return f.statefulSetActionErr
+}
+func (f fakeAdapter) ValidateStatefulSetEvidence(_ context.Context, _, _ string) error {
+	return f.statefulSetEvidenceErr
 }
 func (f fakeAdapter) ValidateRevisionDependencies(_ context.Context, _, _, _ string) error {
 	return f.dependencyErr
@@ -397,11 +405,125 @@ func TestOrchestratorStatefulSetReadOnlyBlocked(t *testing.T) {
 	if req.Status.ShadowAction == "" || req.Status.LastAction != "manual-intervention" {
 		t.Fatalf("expected shadow action and manual intervention")
 	}
+	if req.Status.StatefulSetAuthorization == "" {
+		t.Fatalf("expected statefulset authorization evidence")
+	}
 	if len(events.Events) == 0 || events.Events[len(events.Events)-1].Reason != "StatefulSetReadOnlyBlocked" {
 		t.Fatalf("expected readonly blocked runtime event")
 	}
 	if len(audits.Events) == 0 || audits.Events[len(audits.Events)-1].WorkloadKind != "StatefulSet" {
 		t.Fatalf("expected audit workload kind statefulset")
+	}
+}
+
+func TestOrchestratorStatefulSetControlledActionAuthorized(t *testing.T) {
+	req := newReq()
+	req.Spec.Workload.Kind = "StatefulSet"
+	req.Spec.StatefulSetPolicy.Enabled = true
+	req.Spec.StatefulSetPolicy.ReadOnlyOnly = false
+	req.Spec.StatefulSetPolicy.ControlledActionsEnabled = true
+	req.Spec.StatefulSetPolicy.RequireEvidence = false
+	req.Spec.StatefulSetPolicy.ApprovalAnnotation = "kube-sentinel.io/statefulset-approved"
+	req.Spec.StatefulSetPolicy.AllowedNamespaces = []string{"default"}
+	req.Annotations = map[string]string{
+		"kube-sentinel.io/statefulset-approved": "true",
+	}
+	o := &Orchestrator{
+		Adapter:     fakeAdapter{supports: true},
+		Snapshotter: &MemorySnapshotter{},
+		RuntimeInputProvider: fakeRuntimeInputProvider{input: RuntimeInput{
+			AffectedPods:       1,
+			ClusterPods:        100,
+			TotalWorkloads:     10,
+			UnhealthyWorkloads: 1,
+		}},
+		Metrics: &observability.Metrics{},
+	}
+	if err := o.Process(context.Background(), req); err != nil {
+		t.Fatalf("expected statefulset controlled action success: %v", err)
+	}
+	if req.Status.Phase != ksv1alpha1.PhaseCompleted {
+		t.Fatalf("expected completed phase")
+	}
+	if req.Status.LastAction != "statefulset-controlled-restart" {
+		t.Fatalf("expected controlled restart action")
+	}
+	if req.Status.WorkloadCapability != "conditional-writable" {
+		t.Fatalf("expected conditional-writable capability")
+	}
+}
+
+func TestOrchestratorStatefulSetControlledActionFailureFreeze(t *testing.T) {
+	req := newReq()
+	req.Spec.Workload.Kind = "StatefulSet"
+	req.Spec.StatefulSetPolicy.Enabled = true
+	req.Spec.StatefulSetPolicy.ReadOnlyOnly = false
+	req.Spec.StatefulSetPolicy.ControlledActionsEnabled = true
+	req.Spec.StatefulSetPolicy.RequireEvidence = false
+	req.Spec.StatefulSetPolicy.ApprovalAnnotation = "kube-sentinel.io/statefulset-approved"
+	req.Spec.StatefulSetPolicy.AllowedNamespaces = []string{"default"}
+	req.Spec.StatefulSetPolicy.FreezeWindowMinutes = 5
+	req.Annotations = map[string]string{
+		"kube-sentinel.io/statefulset-approved": "true",
+	}
+	now := time.Unix(1000, 0)
+	o := &Orchestrator{
+		Adapter:     fakeAdapter{supports: true, statefulSetActionErr: errors.New("restart failed")},
+		Snapshotter: &MemorySnapshotter{},
+		RuntimeInputProvider: fakeRuntimeInputProvider{input: RuntimeInput{
+			AffectedPods:       1,
+			ClusterPods:        100,
+			TotalWorkloads:     10,
+			UnhealthyWorkloads: 1,
+		}},
+		Metrics: &observability.Metrics{},
+		Now:     func() time.Time { return now },
+	}
+	if err := o.Process(context.Background(), req); err == nil {
+		t.Fatalf("expected statefulset controlled action failure")
+	}
+	if req.Status.StatefulSetFreezeState != "frozen" || req.Status.StatefulSetFreezeUntil == "" {
+		t.Fatalf("expected freeze state after failure")
+	}
+	req2 := newReq()
+	req2.Spec.Workload = req.Spec.Workload
+	req2.Spec.StatefulSetPolicy = req.Spec.StatefulSetPolicy
+	req2.Annotations = req.Annotations
+	req2.Status.StatefulSetFreezeState = "frozen"
+	req2.Status.StatefulSetFreezeUntil = now.Add(2 * time.Minute).Format(time.RFC3339)
+	if err := o.Process(context.Background(), req2); err == nil {
+		t.Fatalf("expected frozen window block")
+	}
+	if req2.Status.BlockReasonCode != "statefulset_frozen" {
+		t.Fatalf("expected statefulset_frozen block code")
+	}
+}
+
+func TestOrchestratorStatefulSetAuthorizationFailure(t *testing.T) {
+	req := newReq()
+	req.Spec.Workload.Kind = "StatefulSet"
+	req.Spec.StatefulSetPolicy.Enabled = true
+	req.Spec.StatefulSetPolicy.ReadOnlyOnly = false
+	req.Spec.StatefulSetPolicy.ControlledActionsEnabled = true
+	req.Spec.StatefulSetPolicy.RequireEvidence = true
+	req.Spec.StatefulSetPolicy.ApprovalAnnotation = "kube-sentinel.io/statefulset-approved"
+	req.Spec.StatefulSetPolicy.AllowedNamespaces = []string{"default"}
+	req.Annotations = map[string]string{}
+	o := &Orchestrator{
+		Adapter:     fakeAdapter{supports: true},
+		Snapshotter: &MemorySnapshotter{},
+		RuntimeInputProvider: fakeRuntimeInputProvider{input: RuntimeInput{
+			AffectedPods:       1,
+			ClusterPods:        100,
+			TotalWorkloads:     10,
+			UnhealthyWorkloads: 1,
+		}},
+	}
+	if err := o.Process(context.Background(), req); err == nil {
+		t.Fatalf("expected authorization failure")
+	}
+	if req.Status.BlockReasonCode != "statefulset_authorization_failed" {
+		t.Fatalf("expected authorization failed reason code")
 	}
 }
 

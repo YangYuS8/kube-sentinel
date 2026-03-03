@@ -12,6 +12,11 @@ healingRequest:
   statefulSetPolicy:
     enabled: true
     readOnlyOnly: true
+    controlledActionsEnabled: false
+    allowedNamespaces: []
+    approvalAnnotation: kube-sentinel.io/statefulset-approved
+    requireEvidence: true
+    freezeWindowMinutes: 10
   maintenanceWindows: []
   idempotencyWindowMinutes: 5
   soakTimePolicies:

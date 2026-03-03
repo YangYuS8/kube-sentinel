@@ -39,6 +39,15 @@ func TestValidateAllowsStatefulSet(t *testing.T) {
 	if err := r.Validate(); err != nil {
 		t.Fatalf("expected statefulset to be allowed, got err: %v", err)
 	}
+	if r.Spec.StatefulSetPolicy.ApprovalAnnotation == "" {
+		t.Fatalf("expected default approval annotation")
+	}
+	if r.Spec.StatefulSetPolicy.FreezeWindowMinutes < 1 {
+		t.Fatalf("expected freeze window default")
+	}
+	if len(r.Spec.StatefulSetPolicy.AllowedNamespaces) != 1 || r.Spec.StatefulSetPolicy.AllowedNamespaces[0] != "default" {
+		t.Fatalf("expected allowed namespace default to workload namespace")
+	}
 }
 
 func TestValidateRejectsUnsupportedKind(t *testing.T) {
@@ -76,5 +85,25 @@ func TestValidateBoundaries(t *testing.T) {
 	r.Spec.NamespaceBudget.BlockingThresholdPercent = 101
 	if err := r.Validate(); err == nil {
 		t.Fatalf("expected namespace budget threshold validation error")
+	}
+}
+
+func TestValidateStatefulSetPolicyBoundaries(t *testing.T) {
+	r := baseRequest()
+	r.Spec.Workload.Kind = "StatefulSet"
+	r.ApplyDefaults()
+	r.Spec.StatefulSetPolicy.FreezeWindowMinutes = 0
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected freeze window validation error")
+	}
+	r.Spec.StatefulSetPolicy.FreezeWindowMinutes = 10
+	r.Spec.StatefulSetPolicy.AllowedNamespaces = nil
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected allowed namespaces validation error")
+	}
+	r.Spec.StatefulSetPolicy.AllowedNamespaces = []string{"default"}
+	r.Spec.StatefulSetPolicy.ApprovalAnnotation = ""
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected approval annotation validation error")
 	}
 }

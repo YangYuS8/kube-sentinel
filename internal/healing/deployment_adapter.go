@@ -3,6 +3,7 @@ package healing
 import (
 	"context"
 	"fmt"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -91,6 +92,40 @@ func (d DeploymentAdapter) RollbackToRevision(ctx context.Context, namespace, na
 		return d.Client.Update(ctx, &deployment)
 	}
 	return fmt.Errorf("revision %s not found for deployment %s/%s", revision, namespace, name)
+}
+
+func (d DeploymentAdapter) ExecuteStatefulSetControlledAction(ctx context.Context, namespace, name, actionType string) error {
+	if d.Client == nil {
+		return fmt.Errorf("kubernetes client is required")
+	}
+	if actionType != "restart" {
+		return fmt.Errorf("unsupported statefulset action type %q", actionType)
+	}
+	statefulSet := appsv1.StatefulSet{}
+	if err := d.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, &statefulSet); err != nil {
+		return err
+	}
+	statefulSet.Spec.Template.Annotations = ensureStringMap(statefulSet.Spec.Template.Annotations)
+	statefulSet.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = time.Now().UTC().Format(time.RFC3339)
+	return d.Client.Update(ctx, &statefulSet)
+}
+
+func (d DeploymentAdapter) ValidateStatefulSetEvidence(ctx context.Context, namespace, name string) error {
+	if d.Client == nil {
+		return fmt.Errorf("kubernetes client is required")
+	}
+	statefulSet := appsv1.StatefulSet{}
+	if err := d.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, &statefulSet); err != nil {
+		return err
+	}
+	replicas := int32(1)
+	if statefulSet.Spec.Replicas != nil {
+		replicas = *statefulSet.Spec.Replicas
+	}
+	if statefulSet.Status.ReadyReplicas < 1 || statefulSet.Status.ReadyReplicas > replicas {
+		return fmt.Errorf("statefulset readiness evidence is invalid")
+	}
+	return nil
 }
 
 func (d DeploymentAdapter) ValidateRevisionDependencies(ctx context.Context, namespace, name, revision string) error {
@@ -253,4 +288,11 @@ func (d DeploymentAdapter) listDeploymentReplicaSets(ctx context.Context, deploy
 		}
 	}
 	return items, nil
+}
+
+func ensureStringMap(m map[string]string) map[string]string {
+	if m == nil {
+		return map[string]string{}
+	}
+	return m
 }

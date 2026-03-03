@@ -62,6 +62,18 @@ if [[ "$db_reason" != "statefulset_readonly" ]] || [[ "$db_cap" != "read-only" ]
 fi
 echo "ASSERTION OK: StatefulSet 只读评估生效"
 
+echo "[3.1/4] 打开 StatefulSet Phase 2 受控动作并触发审批"
+kubectl -n default patch healingrequest hr-db --type merge -p '{"metadata":{"annotations":{"kube-sentinel.io/statefulset-approved":"true"}},"spec":{"statefulSetPolicy":{"enabled":true,"readOnlyOnly":false,"controlledActionsEnabled":true,"allowedNamespaces":["default"],"approvalAnnotation":"kube-sentinel.io/statefulset-approved","requireEvidence":false,"freezeWindowMinutes":10}}}' >/dev/null
+sleep 2
+db_cap_phase2=$(kubectl -n default get healingrequest hr-db -o jsonpath='{.status.workloadCapability}')
+db_auth=$(kubectl -n default get healingrequest hr-db -o jsonpath='{.status.statefulSetAuthorization}')
+echo "INFO: hr-db phase2 workloadCapability=$db_cap_phase2, authorization=$db_auth"
+if [[ "$db_cap_phase2" != "conditional-writable" ]]; then
+  echo "ASSERTION FAILED: StatefulSet Phase 2 应暴露 conditional-writable 能力"
+  exit 1
+fi
+echo "ASSERTION OK: StatefulSet Phase 2 能力声明生效"
+
 phase=$(kubectl -n default get healingrequest hr-demo-app -o jsonpath='{.status.phase}')
 echo "INFO: 当前阶段=$phase（若候选为空应为L3）"
 

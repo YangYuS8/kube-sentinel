@@ -43,7 +43,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 	}()
 	req.ApplyDefaults()
 	req.Status.CorrelationKey = req.Annotations["kube-sentinel.io/correlation-key"]
-	req.Status.WorkloadCapability = workloadCapabilityForKind(req.Spec.Workload.Kind)
+	req.Status.WorkloadCapability = workloadCapabilityForRequest(req)
 	logger := log.FromContext(ctx).WithValues(
 		"workloadNamespace", req.Spec.Workload.Namespace,
 		"workloadName", req.Spec.Workload.Name,
@@ -206,23 +206,135 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		}
 		return errors.New(decision.Reason)
 	}
-	o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now(), req.Spec.RateLimit.WindowMinutes)
 	req.Status.LastGateDecision = "allowed"
 
 	if req.Spec.Workload.Kind == "StatefulSet" {
-		if o.Metrics != nil {
-			o.Metrics.IncFailures()
-			o.Metrics.IncReadOnlyBlocks("statefulset_readonly", req.Spec.Workload.Kind)
+		if frozen, freezeReason := isStatefulSetFrozen(req, o.Now()); frozen {
+			if o.Metrics != nil {
+				o.Metrics.IncFailures()
+				o.Metrics.IncReadOnlyBlocks("statefulset_frozen", req.Spec.Workload.Kind)
+				o.Metrics.IncStatefulSetControlledAction(req.Spec.Workload.Kind, "restart", "blocked", "frozen")
+			}
+			req.Status.Phase = ksv1alpha1.PhaseBlocked
+			req.Status.LastError = freezeReason
+			req.Status.BlockReasonCode = "statefulset_frozen"
+			req.Status.LastAction = "manual-intervention"
+			req.Status.LastEventReason = "statefulset-frozen"
+			req.Status.StatefulSetFreezeState = "frozen"
+			req.Status.StatefulSetFailureReason = freezeReason
+			req.Status.ShadowAction = "would execute controlled statefulset action but blocked by freeze window"
+			o.emitRuntimeEvent(req, "Warning", "StatefulSetFrozen", freezeReason)
+			o.writeAudit(req, "blocked", freezeReason)
+			return errors.New(req.Status.LastError)
 		}
-		req.Status.Phase = ksv1alpha1.PhaseBlocked
-		req.Status.LastError = "statefulset is in read-only mode; manual intervention required"
-		req.Status.BlockReasonCode = "statefulset_readonly"
-		req.Status.LastAction = "manual-intervention"
-		req.Status.LastEventReason = "statefulset-readonly"
-		req.Status.ShadowAction = "would execute conservative healing action but blocked by statefulset read-only policy"
-		o.emitRuntimeEvent(req, "Warning", "StatefulSetReadOnlyBlocked", req.Status.LastError)
-		o.writeAudit(req, "blocked", req.Status.LastError)
-		return errors.New(req.Status.LastError)
+		authorized, authReason := authorizeStatefulSet(req, runtimeInput)
+		req.Status.StatefulSetAuthorization = authReason
+		if !authorized {
+			blockReasonCode := "statefulset_authorization_failed"
+			lastEventReason := "statefulset-authorization-failed"
+			runtimeEventReason := "StatefulSetAuthorizationFailed"
+			if authReason == "statefulset policy is read-only" {
+				blockReasonCode = "statefulset_readonly"
+				lastEventReason = "statefulset-readonly"
+				runtimeEventReason = "StatefulSetReadOnlyBlocked"
+			}
+			if o.Metrics != nil {
+				o.Metrics.IncFailures()
+				o.Metrics.IncReadOnlyBlocks("statefulset_authorization", req.Spec.Workload.Kind)
+				o.Metrics.IncStatefulSetControlledAction(req.Spec.Workload.Kind, "restart", "blocked", "none")
+			}
+			req.Status.Phase = ksv1alpha1.PhaseBlocked
+			req.Status.LastError = "statefulset controlled action is not authorized; manual intervention required"
+			req.Status.BlockReasonCode = blockReasonCode
+			req.Status.LastAction = "manual-intervention"
+			req.Status.LastEventReason = lastEventReason
+			req.Status.ShadowAction = "would execute controlled statefulset action but authorization gate failed"
+			o.emitRuntimeEvent(req, "Warning", runtimeEventReason, authReason)
+			o.writeAudit(req, "blocked", authReason)
+			return errors.New(req.Status.LastError)
+		}
+		if runtimeInput.ActionsInWindow > 0 {
+			if o.Metrics != nil {
+				o.Metrics.IncFailures()
+				o.Metrics.IncReadOnlyBlocks("statefulset_idempotency_window", req.Spec.Workload.Kind)
+				o.Metrics.IncStatefulSetControlledAction(req.Spec.Workload.Kind, "restart", "blocked", "none")
+			}
+			req.Status.Phase = ksv1alpha1.PhaseBlocked
+			req.Status.LastError = "statefulset action already executed in current idempotency window"
+			req.Status.BlockReasonCode = "statefulset_idempotency_window"
+			req.Status.LastAction = "manual-intervention"
+			req.Status.LastEventReason = "statefulset-idempotency-blocked"
+			req.Status.ShadowAction = "would execute controlled statefulset action but blocked by idempotency window"
+			o.emitRuntimeEvent(req, "Warning", "StatefulSetIdempotencyBlocked", req.Status.LastError)
+			o.writeAudit(req, "blocked", req.Status.LastError)
+			return errors.New(req.Status.LastError)
+		}
+		if err := o.Adapter.ValidateStatefulSetEvidence(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name); err != nil {
+			if o.Metrics != nil {
+				o.Metrics.IncFailures()
+				o.Metrics.IncReadOnlyBlocks("statefulset_evidence_missing", req.Spec.Workload.Kind)
+				o.Metrics.IncStatefulSetControlledAction(req.Spec.Workload.Kind, "restart", "blocked", "none")
+			}
+			req.Status.Phase = ksv1alpha1.PhaseBlocked
+			req.Status.LastError = "statefulset runtime evidence check failed; manual intervention required"
+			req.Status.BlockReasonCode = "statefulset_evidence_missing"
+			req.Status.LastAction = "manual-intervention"
+			req.Status.LastEventReason = "statefulset-evidence-missing"
+			req.Status.StatefulSetFailureReason = err.Error()
+			req.Status.ShadowAction = "would execute controlled statefulset action but runtime evidence check failed"
+			o.emitRuntimeEvent(req, "Warning", "StatefulSetEvidenceMissing", err.Error())
+			o.writeAudit(req, "blocked", err.Error())
+			return errors.New(req.Status.LastError)
+		}
+		snap, err := o.Snapshotter.Create(req.Spec.Workload.Namespace, req.Spec.Workload.Name)
+		if err != nil {
+			if o.Metrics != nil {
+				o.Metrics.IncFailures()
+			}
+			req.Status.Phase = ksv1alpha1.PhaseBlocked
+			req.Status.LastError = err.Error()
+			req.Status.BlockReasonCode = "snapshot_failed"
+			req.Status.LastEventReason = "snapshot-failed"
+			return err
+		}
+		o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now(), req.Spec.IdempotencyWindowMinutes)
+		if err := o.Adapter.ExecuteStatefulSetControlledAction(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name, "restart"); err != nil {
+			_ = o.Snapshotter.Restore(snap)
+			freezeUntil := o.Now().Add(time.Duration(req.Spec.StatefulSetPolicy.FreezeWindowMinutes) * time.Minute)
+			req.Status.Phase = ksv1alpha1.PhaseBlocked
+			req.Status.LastError = "statefulset controlled action failed; fallback to read-only"
+			req.Status.BlockReasonCode = "statefulset_action_failed"
+			req.Status.LastAction = "manual-intervention"
+			req.Status.LastEventReason = "statefulset-action-failed"
+			req.Status.StatefulSetFreezeState = "frozen"
+			req.Status.StatefulSetFreezeUntil = freezeUntil.Format(time.RFC3339)
+			req.Status.StatefulSetFailureReason = err.Error()
+			req.Status.ShadowAction = "statefulset controlled action failed; switched to read-only until manual unlock"
+			if o.Metrics != nil {
+				o.Metrics.IncFailures()
+				o.Metrics.IncReadOnlyBlocks("statefulset_action_failed", req.Spec.Workload.Kind)
+				o.Metrics.IncStatefulSetControlledAction(req.Spec.Workload.Kind, "restart", "fallback", "frozen")
+				o.Metrics.IncStatefulSetFreezeTriggers()
+			}
+			o.emitRuntimeEvent(req, "Warning", "StatefulSetActionFailed", err.Error())
+			o.writeAudit(req, "failed", "statefulset controlled action failed and restored snapshot")
+			return err
+		}
+		req.Status.Phase = ksv1alpha1.PhaseCompleted
+		req.Status.LastAction = "statefulset-controlled-restart"
+		req.Status.LastEventReason = "statefulset-controlled-action-succeeded"
+		req.Status.LastEvidenceStatus = "statefulset-controlled-action-succeeded"
+		req.Status.StatefulSetFreezeState = "none"
+		req.Status.StatefulSetFreezeUntil = ""
+		req.Status.StatefulSetFailureReason = ""
+		req.Status.ObservedGeneration = req.Generation
+		if o.Metrics != nil {
+			o.Metrics.IncSuccess()
+			o.Metrics.IncStatefulSetControlledAction(req.Spec.Workload.Kind, "restart", "executed", "none")
+		}
+		o.emitRuntimeEvent(req, "Normal", "StatefulSetControlledActionSucceeded", "statefulset controlled restart executed")
+		o.writeAudit(req, "success", "statefulset controlled restart executed")
+		return nil
 	}
 
 	snap, err := o.Snapshotter.Create(req.Spec.Workload.Namespace, req.Spec.Workload.Name)
@@ -303,6 +415,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		o.writeAudit(req, "failed", fmt.Sprintf("rollback failed and restored snapshot: %v", err))
 		return err
 	}
+	o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now(), req.Spec.RateLimit.WindowMinutes)
 
 	req.Status.Phase = ksv1alpha1.PhaseCompleted
 	logger.Info("healing process completed", "healthyRevision", latest.Revision)
@@ -418,6 +531,9 @@ func (o *Orchestrator) writeAudit(req *ksv1alpha1.HealingRequest, result, afterS
 		Trigger:      "alertmanager",
 		Target:       req.Spec.Workload.Namespace + "/" + req.Spec.Workload.Name,
 		WorkloadKind: req.Spec.Workload.Kind,
+		ActionType:   req.Status.LastAction,
+		Decision:     req.Status.LastGateDecision,
+		FreezeState:  req.Status.StatefulSetFreezeState,
 		BeforeState:  req.Status.LastEventReason,
 		AfterState:   afterState,
 		Result:       result,
@@ -489,12 +605,66 @@ func maxInt(a, b int) int {
 	return b
 }
 
-func workloadCapabilityForKind(kind string) string {
-	if kind == "StatefulSet" {
+func workloadCapabilityForRequest(req *ksv1alpha1.HealingRequest) string {
+	if req.Spec.Workload.Kind == "StatefulSet" {
+		if req.Spec.StatefulSetPolicy.Enabled && !req.Spec.StatefulSetPolicy.ReadOnlyOnly && req.Spec.StatefulSetPolicy.ControlledActionsEnabled {
+			return "conditional-writable"
+		}
 		return "read-only"
 	}
-	if kind == "Deployment" {
+	if req.Spec.Workload.Kind == "Deployment" {
 		return "writable"
 	}
 	return "unsupported"
+}
+
+func authorizeStatefulSet(req *ksv1alpha1.HealingRequest, runtimeInput RuntimeInput) (bool, string) {
+	policy := req.Spec.StatefulSetPolicy
+	if !policy.Enabled {
+		return false, "statefulset policy is disabled"
+	}
+	if policy.ReadOnlyOnly || !policy.ControlledActionsEnabled {
+		return false, "statefulset policy is read-only"
+	}
+	if !isAllowedNamespace(req.Spec.Workload.Namespace, policy.AllowedNamespaces) {
+		return false, "namespace is not in statefulset allowedNamespaces"
+	}
+	if req.Annotations == nil || !strings.EqualFold(strings.TrimSpace(req.Annotations[policy.ApprovalAnnotation]), "true") {
+		return false, "approval annotation is missing or not true"
+	}
+	if policy.RequireEvidence {
+		if req.Status.LastEvidenceStatus == "" || req.Status.LastEvidenceStatus == "insufficient-evidence" {
+			return false, "runtime evidence is insufficient"
+		}
+		if runtimeInput.ClusterPods < 1 {
+			return false, "runtime evidence is incomplete"
+		}
+	}
+	return true, "authorized"
+}
+
+func isAllowedNamespace(namespace string, allowed []string) bool {
+	for _, candidate := range allowed {
+		if strings.TrimSpace(candidate) == namespace {
+			return true
+		}
+	}
+	return false
+}
+
+func isStatefulSetFrozen(req *ksv1alpha1.HealingRequest, now time.Time) (bool, string) {
+	if req.Status.StatefulSetFreezeState != "frozen" || req.Status.StatefulSetFreezeUntil == "" {
+		return false, ""
+	}
+	freezeUntil, err := time.Parse(time.RFC3339, req.Status.StatefulSetFreezeUntil)
+	if err != nil {
+		return false, ""
+	}
+	if now.Before(freezeUntil) {
+		remaining := freezeUntil.Sub(now).Round(time.Second)
+		return true, fmt.Sprintf("statefulset is in freeze window; remaining=%s", remaining.String())
+	}
+	req.Status.StatefulSetFreezeState = "none"
+	req.Status.StatefulSetFreezeUntil = ""
+	return false, ""
 }

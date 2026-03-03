@@ -17,6 +17,7 @@ type Metrics struct {
 	MaintenanceWindowConflicts uint64
 	Suppressed                 uint64
 	ReadOnlyBlocks             uint64
+	StatefulSetFreezeTriggers  uint64
 }
 
 var (
@@ -54,6 +55,14 @@ var (
 		Name: "kube_sentinel_readonly_blocks_total",
 		Help: "Total number of read-only blocked actions by reason.",
 	}, []string{"reason", "workload_kind"})
+	statefulSetControlledActionCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kube_sentinel_statefulset_controlled_actions_total",
+		Help: "Total number of StatefulSet controlled action decisions.",
+	}, []string{"workload_kind", "action_type", "decision", "freeze_state"})
+	statefulSetFreezeTriggersCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "kube_sentinel_statefulset_freeze_triggers_total",
+		Help: "Total number of StatefulSet freeze triggers.",
+	})
 	strategyDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "kube_sentinel_strategy_duration_seconds",
 		Help:    "Duration of healing strategy execution.",
@@ -72,6 +81,8 @@ func registerPrometheusMetrics() {
 			maintenanceWindowConflictsCounter,
 			suppressedCounter,
 			readOnlyBlocksCounter,
+			statefulSetControlledActionCounter,
+			statefulSetFreezeTriggersCounter,
 			strategyDurationHistogram,
 		)
 	})
@@ -124,6 +135,29 @@ func (m *Metrics) IncReadOnlyBlocks(reason, workloadKind string) {
 		workloadKind = "unknown"
 	}
 	readOnlyBlocksCounter.WithLabelValues(reason, workloadKind).Inc()
+}
+
+func (m *Metrics) IncStatefulSetControlledAction(workloadKind, actionType, decision, freezeState string) {
+	registerPrometheusMetrics()
+	if workloadKind == "" {
+		workloadKind = "unknown"
+	}
+	if actionType == "" {
+		actionType = "unknown"
+	}
+	if decision == "" {
+		decision = "unknown"
+	}
+	if freezeState == "" {
+		freezeState = "none"
+	}
+	statefulSetControlledActionCounter.WithLabelValues(workloadKind, actionType, decision, freezeState).Inc()
+}
+
+func (m *Metrics) IncStatefulSetFreezeTriggers() {
+	registerPrometheusMetrics()
+	atomic.AddUint64(&m.StatefulSetFreezeTriggers, 1)
+	statefulSetFreezeTriggersCounter.Inc()
 }
 
 func (m *Metrics) ObserveStrategyDuration(stage string, duration time.Duration) {

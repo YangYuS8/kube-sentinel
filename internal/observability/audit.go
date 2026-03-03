@@ -7,6 +7,9 @@ type AuditEvent struct {
 	Trigger      string
 	Target       string
 	WorkloadKind string
+	ActionType   string
+	Decision     string
+	FreezeState  string
 	BeforeState  string
 	AfterState   string
 	Result       string

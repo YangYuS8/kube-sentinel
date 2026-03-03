@@ -13,6 +13,8 @@ type WorkloadAdapter interface {
 	Supports(kind string) bool
 	ListRevisions(ctx context.Context, namespace, name string) ([]RevisionRecord, error)
 	RollbackToRevision(ctx context.Context, namespace, name, revision string) error
+	ExecuteStatefulSetControlledAction(ctx context.Context, namespace, name, actionType string) error
+	ValidateStatefulSetEvidence(ctx context.Context, namespace, name string) error
 	ValidateRevisionDependencies(ctx context.Context, namespace, name, revision string) error
 	CountAffectedPods(ctx context.Context, namespace, name string) (int, error)
 	CountClusterPods(ctx context.Context, namespace string) (int, error)

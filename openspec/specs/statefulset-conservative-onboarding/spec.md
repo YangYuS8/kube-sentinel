@@ -1,32 +1,37 @@
-## ADDED Requirements
+## 目的
+
+定义 StatefulSet 从保守只读接入到 Phase 2 条件可写的阶段化策略，确保能力声明、授权失败语义和影子执行说明在全链路一致。
+
+## 需求
+
+### 需求:Phase 2 阶段化能力声明
+
+系统必须支持 StatefulSet 从“默认只读”进入“条件可写”阶段，并保持默认策略不变。
+
+#### 场景: 进入条件可写阶段
+
+- **当** Phase 2 配置显式启用并满足授权门禁
+- **那么** 系统必须将 StatefulSet 能力声明为 `conditional-writable`
 
 ### 需求:StatefulSet 保守只读接入
 
-系统必须支持将 StatefulSet 事件纳入保守评估链路，并在默认策略下禁止自动写操作。
+系统必须支持将 StatefulSet 事件纳入保守评估链路；在 Phase 2 中仅当受控授权条件全部满足时才允许受限自动写操作，否则必须维持只读阻断。
 
-#### 场景: StatefulSet 事件进入只读链路
+#### 场景: Phase 2 授权通过
 
-- **当** 接收到目标为 StatefulSet 的告警事件
-- **那么** 系统必须执行门禁评估与证据计算，但禁止执行 L1/L2 写操作
+- **当** StatefulSet 已满足受控动作授权条件
+- **那么** 系统必须允许进入受限自动动作判定流程
+
+#### 场景: Phase 2 授权失败
+
+- **当** StatefulSet 未满足受控动作授权条件
+- **那么** 系统必须继续保持只读阻断语义
 
 ### 需求:StatefulSet 影子执行说明
 
-系统在阻断 StatefulSet 自动动作时必须输出影子执行说明，包含拟执行动作、阻断原因与人工介入建议。
+系统在阻断 StatefulSet 自动动作时必须输出影子执行说明；在 Phase 2 中需额外标明是“授权失败”还是“阶段关闭”导致阻断。
 
-#### 场景: 只读阻断输出影子执行
+#### 场景: 授权失败阻断说明
 
-- **当** StatefulSet 命中自动动作路径
-- **那么** 系统必须记录 `shadowAction` 并输出 `manual-intervention-required` 语义
-
-### 需求:StatefulSet 关联键一致性
-
-系统必须保证 StatefulSet 在审计、事件、指标中的关联键一致，支持单请求全链路追踪。
-
-#### 场景: 全链路检索
-
-- **当** 运维人员按 correlation key 查询
-- **那么** 必须能够在 audit、event、metric 中检索到同一 StatefulSet 请求
-
-## MODIFIED Requirements
-
-## REMOVED Requirements
+- **当** StatefulSet 因授权门禁未通过被阻断
+- **那么** 输出的影子执行说明必须包含可检索授权失败原因码

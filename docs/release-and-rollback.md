@@ -9,7 +9,9 @@
 5. 通过配置开关启用域级熔断。
 6. 校验 K8s Event 与审计记录可通过 correlation key 串联。
 7. 启用保守模式后，校验 `PendingVerify` / `Suppressed` 状态、影子执行说明与命名空间预算阻断证据。
-8. 启用 StatefulSet 接入时，确认默认仅 `read-only`，且阻断原因包含 `statefulset_readonly`。
+8. 启用 StatefulSet 接入时，先确认默认仅 `read-only`，阻断原因包含 `statefulset_readonly`。
+9. 启用 StatefulSet Phase 2 时，必须同时配置：`controlledActionsEnabled=true`、`allowedNamespaces`、`approvalAnnotation`、`freezeWindowMinutes`。
+10. 灰度期间必须观测以下阈值：误动作率 < 1%、回退率 < 5%、冻结触发率 < 5%。任一越线立即回退只读。
 
 ## 风险
 
@@ -18,7 +20,8 @@
 - 告警重复风暴导致链路抖动（需依赖幂等窗口）。
 - 运行态输入采集失败导致门禁误阻断（需重点关注 GateInputUnavailable 事件）。
 - 命名空间预算阈值配置不当导致过度只读阻断（需结合业务基数调参）。
-- StatefulSet 被误配置为可写导致越权自动操作（需保持 `statefulSetPolicy.readOnlyOnly=true`）。
+- StatefulSet 受控动作授权链路不完整导致误动作（需同时满足开关、白名单、审批、证据链）。
+- StatefulSet 动作失败后未冻结导致重复扰动（需验证 `statefulSetFreezeState=frozen` 与 `statefulSetFreezeUntil`）。
 
 ## 回滚步骤
 
@@ -28,7 +31,8 @@
 4. 如果仍异常，停用自动写操作，仅保留只读评估与告警。
 5. 根据审计记录恢复到最近稳定发布版本。
 6. 关闭保守模式预算阻断与白名单尝试权，恢复基础门禁策略。
-7. 关闭 StatefulSet 接入开关，回退到仅 Deployment 自动链路。
+7. 将 `statefulSetPolicy.controlledActionsEnabled=false` 且 `statefulSetPolicy.readOnlyOnly=true`，回退到只读策略。
+8. 清理审批注解 `kube-sentinel.io/statefulset-approved`，避免误触发下一轮自动动作。
 
 ## 应急步骤
 

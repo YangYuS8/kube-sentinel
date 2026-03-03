@@ -72,17 +72,28 @@ type EmergencyTrySpec struct {
 	MaxAttempts int  `json:"maxAttempts"`
 }
 
+type StatefulSetPolicySpec struct {
+	Enabled                  bool     `json:"enabled,omitempty"`
+	ReadOnlyOnly             bool     `json:"readOnlyOnly,omitempty"`
+	ControlledActionsEnabled bool     `json:"controlledActionsEnabled,omitempty"`
+	AllowedNamespaces        []string `json:"allowedNamespaces,omitempty"`
+	ApprovalAnnotation       string   `json:"approvalAnnotation,omitempty"`
+	RequireEvidence          bool     `json:"requireEvidence,omitempty"`
+	FreezeWindowMinutes      int      `json:"freezeWindowMinutes,omitempty"`
+}
+
 type HealingRequestSpec struct {
-	Workload                 WorkloadRef          `json:"workload"`
-	MaintenanceWindows       []string             `json:"maintenanceWindows,omitempty"`
-	IdempotencyWindowMinutes int                  `json:"idempotencyWindowMinutes,omitempty"`
-	RateLimit                RateLimitSpec        `json:"rateLimit"`
-	BlastRadius              BlastRadiusSpec      `json:"blastRadius"`
-	CircuitBreaker           CircuitBreakerSpec   `json:"circuitBreaker"`
-	HealthyRevision          HealthyRevisionSpec  `json:"healthyRevision"`
-	SoakTimePolicies         []SoakTimePolicySpec `json:"soakTimePolicies,omitempty"`
-	NamespaceBudget          NamespaceBudgetSpec  `json:"namespaceBudget"`
-	EmergencyTry             EmergencyTrySpec     `json:"emergencyTry"`
+	Workload                 WorkloadRef           `json:"workload"`
+	StatefulSetPolicy        StatefulSetPolicySpec `json:"statefulSetPolicy,omitempty"`
+	MaintenanceWindows       []string              `json:"maintenanceWindows,omitempty"`
+	IdempotencyWindowMinutes int                   `json:"idempotencyWindowMinutes,omitempty"`
+	RateLimit                RateLimitSpec         `json:"rateLimit"`
+	BlastRadius              BlastRadiusSpec       `json:"blastRadius"`
+	CircuitBreaker           CircuitBreakerSpec    `json:"circuitBreaker"`
+	HealthyRevision          HealthyRevisionSpec   `json:"healthyRevision"`
+	SoakTimePolicies         []SoakTimePolicySpec  `json:"soakTimePolicies,omitempty"`
+	NamespaceBudget          NamespaceBudgetSpec   `json:"namespaceBudget"`
+	EmergencyTry             EmergencyTrySpec      `json:"emergencyTry"`
 }
 
 type CircuitBreakerStatus struct {
@@ -95,26 +106,30 @@ type CircuitBreakerStatus struct {
 }
 
 type HealingRequestStatus struct {
-	Phase               HealingPhase         `json:"phase,omitempty"`
-	WorkloadCapability  string               `json:"workloadCapability,omitempty"`
-	BlockReasonCode     string               `json:"blockReasonCode,omitempty"`
-	LastAction          string               `json:"lastAction,omitempty"`
-	LastError           string               `json:"lastError,omitempty"`
-	LastGateDecision    string               `json:"lastGateDecision,omitempty"`
-	LastEvidenceStatus  string               `json:"lastEvidenceStatus,omitempty"`
-	LastEventReason     string               `json:"lastEventReason,omitempty"`
-	PendingSince        string               `json:"pendingSince,omitempty"`
-	SuppressedAt        string               `json:"suppressedAt,omitempty"`
-	StableSampleCount   int                  `json:"stableSampleCount,omitempty"`
-	ShadowAction        string               `json:"shadowAction,omitempty"`
-	NamespaceBlockRate  int                  `json:"namespaceBlockRate,omitempty"`
-	EmergencyAttempts   int                  `json:"emergencyAttempts,omitempty"`
-	CorrelationKey      string               `json:"correlationKey,omitempty"`
-	LastHealthyRevision string               `json:"lastHealthyRevision,omitempty"`
-	AuditRef            string               `json:"auditRef,omitempty"`
-	ObservedGeneration  int64                `json:"observedGeneration,omitempty"`
-	CircuitBreaker      CircuitBreakerStatus `json:"circuitBreaker,omitempty"`
-	Conditions          []metav1.Condition   `json:"conditions,omitempty"`
+	Phase                    HealingPhase         `json:"phase,omitempty"`
+	WorkloadCapability       string               `json:"workloadCapability,omitempty"`
+	StatefulSetAuthorization string               `json:"statefulSetAuthorization,omitempty"`
+	StatefulSetFreezeState   string               `json:"statefulSetFreezeState,omitempty"`
+	StatefulSetFreezeUntil   string               `json:"statefulSetFreezeUntil,omitempty"`
+	StatefulSetFailureReason string               `json:"statefulSetFailureReason,omitempty"`
+	BlockReasonCode          string               `json:"blockReasonCode,omitempty"`
+	LastAction               string               `json:"lastAction,omitempty"`
+	LastError                string               `json:"lastError,omitempty"`
+	LastGateDecision         string               `json:"lastGateDecision,omitempty"`
+	LastEvidenceStatus       string               `json:"lastEvidenceStatus,omitempty"`
+	LastEventReason          string               `json:"lastEventReason,omitempty"`
+	PendingSince             string               `json:"pendingSince,omitempty"`
+	SuppressedAt             string               `json:"suppressedAt,omitempty"`
+	StableSampleCount        int                  `json:"stableSampleCount,omitempty"`
+	ShadowAction             string               `json:"shadowAction,omitempty"`
+	NamespaceBlockRate       int                  `json:"namespaceBlockRate,omitempty"`
+	EmergencyAttempts        int                  `json:"emergencyAttempts,omitempty"`
+	CorrelationKey           string               `json:"correlationKey,omitempty"`
+	LastHealthyRevision      string               `json:"lastHealthyRevision,omitempty"`
+	AuditRef                 string               `json:"auditRef,omitempty"`
+	ObservedGeneration       int64                `json:"observedGeneration,omitempty"`
+	CircuitBreaker           CircuitBreakerStatus `json:"circuitBreaker,omitempty"`
+	Conditions               []metav1.Condition   `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -202,6 +217,23 @@ func (r *HealingRequest) ApplyDefaults() {
 	if r.Spec.EmergencyTry.MaxAttempts == 0 {
 		r.Spec.EmergencyTry.MaxAttempts = 1
 	}
+	if r.Spec.StatefulSetPolicy.ApprovalAnnotation == "" {
+		r.Spec.StatefulSetPolicy.ApprovalAnnotation = "kube-sentinel.io/statefulset-approved"
+	}
+	if r.Spec.StatefulSetPolicy.FreezeWindowMinutes == 0 {
+		r.Spec.StatefulSetPolicy.FreezeWindowMinutes = 10
+	}
+	if r.Spec.Workload.Kind == "StatefulSet" {
+		if len(r.Spec.StatefulSetPolicy.AllowedNamespaces) == 0 {
+			r.Spec.StatefulSetPolicy.AllowedNamespaces = []string{r.Spec.Workload.Namespace}
+		}
+		if !r.Spec.StatefulSetPolicy.Enabled {
+			r.Spec.StatefulSetPolicy.Enabled = true
+		}
+		if !r.Spec.StatefulSetPolicy.ReadOnlyOnly && !r.Spec.StatefulSetPolicy.ControlledActionsEnabled {
+			r.Spec.StatefulSetPolicy.ReadOnlyOnly = true
+		}
+	}
 }
 
 func (r *HealingRequest) Validate() error {
@@ -246,6 +278,17 @@ func (r *HealingRequest) Validate() error {
 	}
 	if r.Spec.EmergencyTry.MaxAttempts < 1 {
 		return fmt.Errorf("emergencyTry.maxAttempts must be >= 1")
+	}
+	if r.Spec.StatefulSetPolicy.FreezeWindowMinutes < 1 {
+		return fmt.Errorf("statefulSetPolicy.freezeWindowMinutes must be >= 1")
+	}
+	if r.Spec.Workload.Kind == "StatefulSet" {
+		if len(r.Spec.StatefulSetPolicy.AllowedNamespaces) == 0 {
+			return fmt.Errorf("statefulSetPolicy.allowedNamespaces must not be empty for StatefulSet")
+		}
+		if r.Spec.StatefulSetPolicy.ApprovalAnnotation == "" {
+			return fmt.Errorf("statefulSetPolicy.approvalAnnotation is required for StatefulSet")
+		}
 	}
 	for _, policy := range r.Spec.SoakTimePolicies {
 		if policy.DurationSec < 1 {
