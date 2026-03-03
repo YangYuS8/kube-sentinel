@@ -1,0 +1,24 @@
+groups:
+  - name: kube-sentinel
+    rules:
+      - alert: KubeSentinelHealingFailureRateHigh
+        expr: kube_sentinel_healing_failures_total > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kube-Sentinel healing failure rate is high"
+      - alert: KubeSentinelCircuitBreakerTriggered
+        expr: kube_sentinel_circuit_breaks_total > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kube-Sentinel circuit breaker triggered"
+      - alert: KubeSentinelMaintenanceWindowConflict
+        expr: kube_sentinel_maintenance_window_conflict_total > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kube-Sentinel maintenance window conflict"

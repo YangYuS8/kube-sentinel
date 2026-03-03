@@ -1,0 +1,19 @@
+image:
+  repository: kube-sentinel/controller
+  tag: latest
+
+healingRequest:
+  workloadKind: Deployment
+  rateLimit:
+    maxActions: 3
+    windowMinutes: 10
+  blastRadius:
+    maxPodPercentage: 10
+  circuitBreaker:
+    objectFailureThreshold: 3
+    domainFailureThreshold: 10
+    cooldownMinutes: 10
+    scope: Namespace
+  healthyRevision:
+    observeMinutes: 5
+    requireNoCriticalAlerts: true

@@ -8,6 +8,13 @@
       "approve": true,
       "matchCommandLine": true
     },
-    "openspec-cn": true
+    "openspec-cn": true,
+    "go": true,
+    "setopt": true,
+    "nocorrect": true,
+    "env": true,
+    "mkdir": true,
+    "exit": true,
+    "mv": true
   }
 }

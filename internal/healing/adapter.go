@@ -1,0 +1,16 @@
+package healing
+
+import "context"
+
+type RevisionRecord struct {
+	Revision string
+	UnixTime int64
+	Healthy  bool
+}
+
+type WorkloadAdapter interface {
+	Kind() string
+	Supports(kind string) bool
+	ListRevisions(ctx context.Context, namespace, name string) ([]RevisionRecord, error)
+	RollbackToRevision(ctx context.Context, namespace, name, revision string) error
+}
