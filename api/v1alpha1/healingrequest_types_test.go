@@ -12,6 +12,9 @@ func TestApplyDefaults(t *testing.T) {
 	if r.Spec.RateLimit.MaxActions != 3 || r.Spec.RateLimit.WindowMinutes != 10 {
 		t.Fatalf("rate limit defaults not applied")
 	}
+	if r.Spec.IdempotencyWindowMinutes != 5 {
+		t.Fatalf("idempotency window default not applied")
+	}
 	if r.Spec.BlastRadius.MaxPodPercentage != 10 {
 		t.Fatalf("blast radius default not applied")
 	}
@@ -35,5 +38,10 @@ func TestValidateBoundaries(t *testing.T) {
 	r.Spec.BlastRadius.MaxPodPercentage = 101
 	if err := r.Validate(); err == nil {
 		t.Fatalf("expected boundary validation error")
+	}
+	r.Spec.BlastRadius.MaxPodPercentage = 10
+	r.Spec.IdempotencyWindowMinutes = 0
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected idempotency window validation error")
 	}
 }

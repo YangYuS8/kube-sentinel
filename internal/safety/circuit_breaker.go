@@ -10,6 +10,13 @@ type breakerState struct {
 	openUntil time.Time
 }
 
+type BreakerStatus struct {
+	CurrentObjectFailures int
+	CurrentDomainFailures int
+	OpenReason            string
+	RecoveryAt            string
+}
+
 type CircuitBreaker struct {
 	mu               sync.Mutex
 	objectThreshold  int
@@ -70,4 +77,24 @@ func (b *CircuitBreaker) Recover(objectKey string, now time.Time) {
 	if !now.Before(b.domainState.openUntil) {
 		b.domainState.openUntil = time.Time{}
 	}
+}
+
+func (b *CircuitBreaker) Status(objectKey string) BreakerStatus {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	obj := b.objectStates[objectKey]
+	status := BreakerStatus{
+		CurrentObjectFailures: obj.failures,
+		CurrentDomainFailures: b.domainState.failures,
+	}
+	if !obj.openUntil.IsZero() {
+		status.OpenReason = "object breaker open"
+		status.RecoveryAt = obj.openUntil.Format(time.RFC3339)
+		return status
+	}
+	if !b.domainState.openUntil.IsZero() {
+		status.OpenReason = "domain breaker open"
+		status.RecoveryAt = b.domainState.openUntil.Format(time.RFC3339)
+	}
+	return status
 }

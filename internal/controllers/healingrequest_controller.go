@@ -31,6 +31,7 @@ func (r *HealingRequestReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			Breaker:     safety.NewCircuitBreaker(3, 10, 10),
 			Metrics:     &observability.Metrics{},
 			AuditSink:   &observability.MemoryAuditSink{},
+			EventSink:   &observability.MemoryEventSink{},
 		}
 	}
 	if err := r.Orchestrator.Process(ctx, &resource); err != nil {

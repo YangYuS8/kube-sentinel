@@ -29,4 +29,8 @@ func TestDomainBreakerPriority(t *testing.T) {
 	if allow || reason != "domain breaker open" {
 		t.Fatalf("expected domain breaker open")
 	}
+	status := b.Status("ns/app3")
+	if status.OpenReason != "domain breaker open" || status.RecoveryAt == "" {
+		t.Fatalf("expected domain breaker evidence in status")
+	}
 }

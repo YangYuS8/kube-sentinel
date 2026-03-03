@@ -20,3 +20,11 @@ func TestAuditSinkWrite(t *testing.T) {
 		t.Fatalf("expected 1 audit event")
 	}
 }
+
+func TestEventSinkRecord(t *testing.T) {
+	s := &MemoryEventSink{}
+	s.Record(RuntimeEvent{CorrelationKey: "trace-1", Reason: "GateBlocked"})
+	if len(s.Events) != 1 {
+		t.Fatalf("expected 1 runtime event")
+	}
+}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"net/http"
 	"os"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -13,6 +14,8 @@ import (
 
 	ksv1alpha1 "github.com/yangyus8/kube-sentinel/api/v1alpha1"
 	"github.com/yangyus8/kube-sentinel/internal/controllers"
+	"github.com/yangyus8/kube-sentinel/internal/ingestion"
+	"github.com/yangyus8/kube-sentinel/internal/observability"
 )
 
 func main() {
@@ -42,6 +45,17 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		os.Exit(1)
 	}
+
+	auditSink := &observability.MemoryAuditSink{}
+	receiver := &ingestion.Receiver{
+		Client:   mgr.GetClient(),
+		Dedupe:   ingestion.NewMemoryDedupeStore(),
+		AuditSink: auditSink,
+	}
+	http.HandleFunc("/alertmanager/webhook", receiver.HandleWebhook)
+	go func() {
+		_ = http.ListenAndServe(":8090", nil)
+	}()
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		os.Exit(1)

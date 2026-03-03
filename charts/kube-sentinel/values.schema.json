@@ -2,10 +2,20 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "properties": {
+    "webhook": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "bindAddress": { "type": "string", "minLength": 1 },
+        "path": { "type": "string", "minLength": 1 }
+      },
+      "required": ["enabled", "bindAddress", "path"]
+    },
     "healingRequest": {
       "type": "object",
       "properties": {
         "workloadKind": { "type": "string", "enum": ["Deployment"] },
+        "idempotencyWindowMinutes": { "type": "integer", "minimum": 1 },
         "rateLimit": {
           "type": "object",
           "properties": {
@@ -40,8 +50,8 @@
           "required": ["observeMinutes", "requireNoCriticalAlerts"]
         }
       },
-      "required": ["workloadKind", "rateLimit", "blastRadius", "circuitBreaker", "healthyRevision"]
+      "required": ["workloadKind", "idempotencyWindowMinutes", "rateLimit", "blastRadius", "circuitBreaker", "healthyRevision"]
     }
   },
-  "required": ["healingRequest"]
+  "required": ["webhook", "healingRequest"]
 }

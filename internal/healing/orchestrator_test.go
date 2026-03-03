@@ -63,6 +63,9 @@ func TestOrchestratorL3OnNoHealthy(t *testing.T) {
 	if req.Status.Phase != ksv1alpha1.PhaseL3 {
 		t.Fatalf("expected L3, got %s", req.Status.Phase)
 	}
+	if req.Status.LastEvidenceStatus != "insufficient-evidence" {
+		t.Fatalf("expected insufficient-evidence, got %s", req.Status.LastEvidenceStatus)
+	}
 }
 
 func TestOrchestratorRollbackFailureRestore(t *testing.T) {
@@ -73,5 +76,27 @@ func TestOrchestratorRollbackFailureRestore(t *testing.T) {
 	}
 	if err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected rollback error")
+	}
+}
+
+func TestOrchestratorCorrelationAndEvent(t *testing.T) {
+	req := newReq()
+	req.Annotations = map[string]string{"kube-sentinel.io/correlation-key": "trace-1"}
+	events := &observability.MemoryEventSink{}
+	o := &Orchestrator{
+		Adapter: fakeAdapter{supports: true, revisions: []RevisionRecord{{Revision: "2", UnixTime: 2, Healthy: true}}},
+		Snapshotter: &MemorySnapshotter{},
+		Breaker: safety.NewCircuitBreaker(3, 10, 1),
+		Metrics: &observability.Metrics{},
+		EventSink: events,
+	}
+	if err := o.Process(context.Background(), req); err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if req.Status.CorrelationKey != "trace-1" {
+		t.Fatalf("correlation key not propagated")
+	}
+	if len(events.Events) == 0 {
+		t.Fatalf("expected runtime events")
 	}
 }

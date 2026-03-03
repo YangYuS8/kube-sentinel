@@ -55,6 +55,7 @@ type HealthyRevisionSpec struct {
 type HealingRequestSpec struct {
 	Workload           WorkloadRef          `json:"workload"`
 	MaintenanceWindows []string             `json:"maintenanceWindows,omitempty"`
+	IdempotencyWindowMinutes int            `json:"idempotencyWindowMinutes,omitempty"`
 	RateLimit          RateLimitSpec        `json:"rateLimit"`
 	BlastRadius        BlastRadiusSpec      `json:"blastRadius"`
 	CircuitBreaker     CircuitBreakerSpec   `json:"circuitBreaker"`
@@ -65,12 +66,19 @@ type CircuitBreakerStatus struct {
 	ObjectOpen bool   `json:"objectOpen,omitempty"`
 	DomainOpen bool   `json:"domainOpen,omitempty"`
 	OpenReason string `json:"openReason,omitempty"`
+	CurrentObjectFailures int `json:"currentObjectFailures,omitempty"`
+	CurrentDomainFailures int `json:"currentDomainFailures,omitempty"`
+	RecoveryAt string `json:"recoveryAt,omitempty"`
 }
 
 type HealingRequestStatus struct {
 	Phase               HealingPhase         `json:"phase,omitempty"`
 	LastAction          string               `json:"lastAction,omitempty"`
 	LastError           string               `json:"lastError,omitempty"`
+	LastGateDecision    string               `json:"lastGateDecision,omitempty"`
+	LastEvidenceStatus  string               `json:"lastEvidenceStatus,omitempty"`
+	LastEventReason     string               `json:"lastEventReason,omitempty"`
+	CorrelationKey      string               `json:"correlationKey,omitempty"`
 	LastHealthyRevision string               `json:"lastHealthyRevision,omitempty"`
 	AuditRef            string               `json:"auditRef,omitempty"`
 	ObservedGeneration  int64                `json:"observedGeneration,omitempty"`
@@ -121,6 +129,9 @@ func (r *HealingRequest) ApplyDefaults() {
 	if r.Spec.RateLimit.WindowMinutes == 0 {
 		r.Spec.RateLimit.WindowMinutes = 10
 	}
+	if r.Spec.IdempotencyWindowMinutes == 0 {
+		r.Spec.IdempotencyWindowMinutes = 5
+	}
 	if r.Spec.BlastRadius.MaxPodPercentage == 0 {
 		r.Spec.BlastRadius.MaxPodPercentage = 10
 	}
@@ -153,6 +164,9 @@ func (r *HealingRequest) Validate() error {
 	}
 	if r.Spec.RateLimit.WindowMinutes < 1 {
 		return fmt.Errorf("rateLimit.windowMinutes must be >= 1")
+	}
+	if r.Spec.IdempotencyWindowMinutes < 1 {
+		return fmt.Errorf("idempotencyWindowMinutes must be >= 1")
 	}
 	if r.Spec.BlastRadius.MaxPodPercentage < 1 || r.Spec.BlastRadius.MaxPodPercentage > 100 {
 		return fmt.Errorf("blastRadius.maxPodPercentage must be between 1 and 100")

@@ -2,8 +2,14 @@ image:
   repository: kube-sentinel/controller
   tag: latest
 
+webhook:
+  enabled: true
+  bindAddress: ":8090"
+  path: /alertmanager/webhook
+
 healingRequest:
   workloadKind: Deployment
+  idempotencyWindowMinutes: 5
   rateLimit:
     maxActions: 3
     windowMinutes: 10
