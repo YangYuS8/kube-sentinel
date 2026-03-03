@@ -57,7 +57,7 @@ func (r *Receiver) HandleWebhook(w http.ResponseWriter, req *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if event.WorkloadKind != "Deployment" {
+		if !supportsWorkloadKind(event.WorkloadKind) {
 			r.writeAudit(event, "read-only-reject", "unsupported workload kind")
 			continue
 		}
@@ -118,8 +118,10 @@ func (r *Receiver) upsertHealingRequest(ctx context.Context, event Event) error 
 		obj.Annotations["kube-sentinel.io/alert-status"] = event.AlertStatus
 		obj.Annotations["kube-sentinel.io/alert-category"] = event.AlertCategory
 		obj.Annotations["kube-sentinel.io/alert-severity"] = event.AlertSeverity
+		obj.Annotations["kube-sentinel.io/workload-capability"] = workloadCapabilityForKind(event.WorkloadKind)
 		obj.Status.CorrelationKey = event.CorrelationKey
 		obj.Status.LastEventReason = event.Reason
+		obj.Status.WorkloadCapability = workloadCapabilityForKind(event.WorkloadKind)
 		return r.Client.Update(ctx, &obj)
 	}
 
@@ -128,10 +130,11 @@ func (r *Receiver) upsertHealingRequest(ctx context.Context, event Event) error 
 			Name:      name,
 			Namespace: event.Namespace,
 			Annotations: map[string]string{
-				"kube-sentinel.io/correlation-key": event.CorrelationKey,
-				"kube-sentinel.io/alert-status":    event.AlertStatus,
-				"kube-sentinel.io/alert-category":  event.AlertCategory,
-				"kube-sentinel.io/alert-severity":  event.AlertSeverity,
+				"kube-sentinel.io/correlation-key":     event.CorrelationKey,
+				"kube-sentinel.io/alert-status":        event.AlertStatus,
+				"kube-sentinel.io/alert-category":      event.AlertCategory,
+				"kube-sentinel.io/alert-severity":      event.AlertSeverity,
+				"kube-sentinel.io/workload-capability": workloadCapabilityForKind(event.WorkloadKind),
 			},
 		},
 		Spec: ksv1alpha1.HealingRequestSpec{
@@ -178,12 +181,24 @@ func (r *Receiver) writeAudit(event Event, result, detail string) {
 		return
 	}
 	r.AuditSink.Write(observability.AuditEvent{
-		ID:          event.CorrelationKey,
-		Trigger:     "alertmanager",
-		Target:      event.Namespace + "/" + event.Name,
-		BeforeState: "event-received",
-		AfterState:  detail,
-		Result:      result,
-		CreatedAt:   r.Now(),
+		ID:           event.CorrelationKey,
+		Trigger:      "alertmanager",
+		Target:       event.Namespace + "/" + event.Name,
+		WorkloadKind: event.WorkloadKind,
+		BeforeState:  "event-received",
+		AfterState:   detail,
+		Result:       result,
+		CreatedAt:    r.Now(),
 	})
+}
+
+func supportsWorkloadKind(kind string) bool {
+	return kind == "Deployment" || kind == "StatefulSet"
+}
+
+func workloadCapabilityForKind(kind string) string {
+	if kind == "StatefulSet" {
+		return "read-only"
+	}
+	return "writable"
 }

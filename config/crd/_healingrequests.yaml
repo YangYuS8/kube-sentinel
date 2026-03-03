@@ -153,6 +153,8 @@ spec:
             properties:
               auditRef:
                 type: string
+              blockReasonCode:
+                type: string
               circuitBreaker:
                 properties:
                   currentDomainFailures:
@@ -254,6 +256,8 @@ spec:
               stableSampleCount:
                 type: integer
               suppressedAt:
+                type: string
+              workloadCapability:
                 type: string
             type: object
         type: object

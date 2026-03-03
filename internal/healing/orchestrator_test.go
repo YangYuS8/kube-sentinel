@@ -25,8 +25,10 @@ type fakeAdapter struct {
 	unhealthyWorkloads int
 }
 
-func (f fakeAdapter) Kind() string              { return "Deployment" }
-func (f fakeAdapter) Supports(kind string) bool { return f.supports && kind == "Deployment" }
+func (f fakeAdapter) Kind() string { return "Deployment" }
+func (f fakeAdapter) Supports(kind string) bool {
+	return f.supports && (kind == "Deployment" || kind == "StatefulSet")
+}
 func (f fakeAdapter) ListRevisions(_ context.Context, _, _ string) ([]RevisionRecord, error) {
 	return f.revisions, f.listErr
 }
@@ -68,6 +70,18 @@ func newReq() *ksv1alpha1.HealingRequest {
 	}
 }
 
+type fakeRuntimeInputProvider struct {
+	input RuntimeInput
+	err   error
+}
+
+func (f fakeRuntimeInputProvider) Build(_ context.Context, _ *ksv1alpha1.HealingRequest) (RuntimeInput, error) {
+	if f.err != nil {
+		return RuntimeInput{}, f.err
+	}
+	return f.input, nil
+}
+
 func TestOrchestratorIdempotent(t *testing.T) {
 	req := newReq()
 	req.Status.Phase = ksv1alpha1.PhaseCompleted
@@ -80,8 +94,8 @@ func TestOrchestratorIdempotent(t *testing.T) {
 
 func TestOrchestratorUnsupportedKind(t *testing.T) {
 	req := newReq()
-	req.Spec.Workload.Kind = "StatefulSet"
-	o := &Orchestrator{Adapter: fakeAdapter{supports: false}, Snapshotter: &MemorySnapshotter{}}
+	req.Spec.Workload.Kind = "Job"
+	o := &Orchestrator{Adapter: fakeAdapter{supports: true}, Snapshotter: &MemorySnapshotter{}}
 	if err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected unsupported kind error")
 	}
@@ -350,5 +364,134 @@ func TestOrchestratorShadowActionEventAuditConsistency(t *testing.T) {
 	}
 	if len(audits.Events) == 0 || audits.Events[len(audits.Events)-1].Result != "blocked" {
 		t.Fatalf("expected blocked audit event")
+	}
+}
+
+func TestOrchestratorStatefulSetReadOnlyBlocked(t *testing.T) {
+	req := newReq()
+	req.Spec.Workload.Kind = "StatefulSet"
+	req.Annotations = map[string]string{
+		"kube-sentinel.io/alert-status": "firing",
+	}
+	events := &observability.MemoryEventSink{}
+	audits := &observability.MemoryAuditSink{}
+	now := time.Unix(1000, 0)
+	o := &Orchestrator{
+		Adapter:     fakeAdapter{supports: true},
+		Snapshotter: &MemorySnapshotter{},
+		EventSink:   events,
+		AuditSink:   audits,
+		Now:         func() time.Time { return now.Add(10 * time.Minute) },
+	}
+	req.Status.PendingSince = now.Format(time.RFC3339)
+	req.Status.StableSampleCount = 3
+	if err := o.Process(context.Background(), req); err == nil {
+		t.Fatalf("expected statefulset readonly block")
+	}
+	if req.Status.WorkloadCapability != "read-only" {
+		t.Fatalf("expected read-only workload capability")
+	}
+	if req.Status.BlockReasonCode != "statefulset_readonly" {
+		t.Fatalf("expected statefulset_readonly reason code")
+	}
+	if req.Status.ShadowAction == "" || req.Status.LastAction != "manual-intervention" {
+		t.Fatalf("expected shadow action and manual intervention")
+	}
+	if len(events.Events) == 0 || events.Events[len(events.Events)-1].Reason != "StatefulSetReadOnlyBlocked" {
+		t.Fatalf("expected readonly blocked runtime event")
+	}
+	if len(audits.Events) == 0 || audits.Events[len(audits.Events)-1].WorkloadKind != "StatefulSet" {
+		t.Fatalf("expected audit workload kind statefulset")
+	}
+}
+
+func TestOrchestratorStatefulSetGateBoundaries(t *testing.T) {
+	t.Run("maintenance window", func(t *testing.T) {
+		req := newReq()
+		req.Spec.Workload.Kind = "StatefulSet"
+		req.Spec.MaintenanceWindows = []string{"00:00-23:59"}
+		now := time.Date(2026, 3, 3, 12, 0, 0, 0, time.UTC)
+		o := &Orchestrator{
+			Adapter:     fakeAdapter{supports: true},
+			Snapshotter: &MemorySnapshotter{},
+			RuntimeInputProvider: fakeRuntimeInputProvider{input: RuntimeInput{
+				AffectedPods:       1,
+				ClusterPods:        100,
+				TotalWorkloads:     10,
+				UnhealthyWorkloads: 1,
+			}},
+			Now: func() time.Time { return now },
+		}
+		if err := o.Process(context.Background(), req); err == nil {
+			t.Fatalf("expected maintenance window block")
+		}
+		if req.Status.BlockReasonCode != "gate_blocked" {
+			t.Fatalf("expected gate_blocked reason code")
+		}
+	})
+
+	t.Run("rate limit", func(t *testing.T) {
+		req := newReq()
+		req.Spec.Workload.Kind = "StatefulSet"
+		req.Spec.RateLimit.MaxActions = 1
+		req.Spec.RateLimit.WindowMinutes = 10
+		now := time.Unix(1000, 0)
+		o := &Orchestrator{
+			Adapter:     fakeAdapter{supports: true},
+			Snapshotter: &MemorySnapshotter{},
+			RuntimeInputProvider: fakeRuntimeInputProvider{input: RuntimeInput{
+				AffectedPods:       1,
+				ClusterPods:        100,
+				TotalWorkloads:     10,
+				UnhealthyWorkloads: 1,
+			}},
+			Now: func() time.Time { return now },
+		}
+		o.actionHistory = map[string][]time.Time{req.Spec.Workload.Namespace + "/" + req.Spec.Workload.Name: []time.Time{now.Add(-time.Minute)}}
+		if err := o.Process(context.Background(), req); err == nil {
+			t.Fatalf("expected rate limit block")
+		}
+		if req.Status.BlockReasonCode != "gate_blocked" {
+			t.Fatalf("expected gate_blocked reason code")
+		}
+	})
+
+	t.Run("blast radius", func(t *testing.T) {
+		req := newReq()
+		req.Spec.Workload.Kind = "StatefulSet"
+		req.Spec.BlastRadius.MaxPodPercentage = 10
+		o := &Orchestrator{
+			Adapter:     fakeAdapter{supports: true},
+			Snapshotter: &MemorySnapshotter{},
+			RuntimeInputProvider: fakeRuntimeInputProvider{input: RuntimeInput{
+				AffectedPods:       30,
+				ClusterPods:        100,
+				TotalWorkloads:     10,
+				UnhealthyWorkloads: 1,
+			}},
+		}
+		if err := o.Process(context.Background(), req); err == nil {
+			t.Fatalf("expected blast radius block")
+		}
+		if req.Status.BlockReasonCode != "gate_blocked" {
+			t.Fatalf("expected gate_blocked reason code")
+		}
+	})
+}
+
+func TestOrchestratorObservabilityDegradedStillBlocksSafely(t *testing.T) {
+	req := newReq()
+	req.Spec.Workload.Kind = "StatefulSet"
+	o := &Orchestrator{
+		Adapter:     fakeAdapter{supports: true, totalWorkloads: 10, unhealthyWorkloads: 4},
+		Snapshotter: &MemorySnapshotter{},
+		EventSink:   nil,
+		AuditSink:   nil,
+	}
+	if err := o.Process(context.Background(), req); err == nil {
+		t.Fatalf("expected safe readonly block even when observability sinks are nil")
+	}
+	if req.Status.Phase != ksv1alpha1.PhaseBlocked {
+		t.Fatalf("expected blocked phase")
 	}
 }

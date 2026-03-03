@@ -98,7 +98,7 @@ func TestWebhookDedupeUsesRequestWindow(t *testing.T) {
 	}
 }
 
-func TestWebhookRejectsNonDeploymentReadOnly(t *testing.T) {
+func TestWebhookStatefulSetCreatesReadOnlyRequest(t *testing.T) {
 	r := buildReceiver(t)
 	payload := AlertmanagerPayload{Alerts: []Alert{{Fingerprint: "fp-non", Labels: map[string]string{"workload_kind": "StatefulSet", "namespace": "default", "name": "db"}}}}
 	body, _ := json.Marshal(payload)
@@ -106,7 +106,30 @@ func TestWebhookRejectsNonDeploymentReadOnly(t *testing.T) {
 	w := httptest.NewRecorder()
 	r.HandleWebhook(w, req)
 	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected accepted for statefulset readonly path")
+	}
+	var obj ksv1alpha1.HealingRequest
+	if err := r.Client.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "hr-db"}, &obj); err != nil {
+		t.Fatalf("expected healingrequest for statefulset: %v", err)
+	}
+	if obj.Annotations["kube-sentinel.io/workload-capability"] != "read-only" {
+		t.Fatalf("expected read-only capability annotation")
+	}
+}
+
+func TestWebhookRejectsUnsupportedKindReadOnly(t *testing.T) {
+	r := buildReceiver(t)
+	payload := AlertmanagerPayload{Alerts: []Alert{{Fingerprint: "fp-non", Labels: map[string]string{"workload_kind": "Job", "namespace": "default", "name": "batch"}}}}
+	body, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/alertmanager/webhook", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	r.HandleWebhook(w, req)
+	if w.Code != http.StatusAccepted {
 		t.Fatalf("expected accepted with readonly reject")
+	}
+	var obj ksv1alpha1.HealingRequest
+	if err := r.Client.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "hr-batch"}, &obj); err == nil {
+		t.Fatalf("unsupported workload kind should not create healingrequest")
 	}
 }
 

@@ -43,6 +43,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 	}()
 	req.ApplyDefaults()
 	req.Status.CorrelationKey = req.Annotations["kube-sentinel.io/correlation-key"]
+	req.Status.WorkloadCapability = workloadCapabilityForKind(req.Spec.Workload.Kind)
 	logger := log.FromContext(ctx).WithValues(
 		"workloadNamespace", req.Spec.Workload.Namespace,
 		"workloadName", req.Spec.Workload.Name,
@@ -69,6 +70,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		}
 		req.Status.LastError = "unsupported kind"
 		req.Status.Phase = ksv1alpha1.PhaseBlocked
+		req.Status.BlockReasonCode = "unsupported_workload"
 		req.Status.LastEventReason = "unsupported-workload"
 		return fmt.Errorf("unsupported kind")
 	}
@@ -86,6 +88,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 			}
 			req.Status.Phase = ksv1alpha1.PhaseBlocked
 			req.Status.LastError = reason
+			req.Status.BlockReasonCode = "circuit_breaker_open"
 			req.Status.LastGateDecision = reason
 			state := breaker.Status(req.Spec.Workload.Namespace + "/" + req.Spec.Workload.Name)
 			req.Status.CircuitBreaker.ObjectOpen = state.OpenReason == "object breaker open"
@@ -114,6 +117,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		}
 		req.Status.Phase = ksv1alpha1.PhaseBlocked
 		req.Status.LastError = fmt.Sprintf("runtime input unavailable: %v", err)
+		req.Status.BlockReasonCode = "runtime_input_unavailable"
 		req.Status.LastGateDecision = "runtime input unavailable"
 		o.emitRuntimeEvent(req, "Warning", "GateInputUnavailable", err.Error())
 		o.writeAudit(req, "blocked", req.Status.LastError)
@@ -161,10 +165,11 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		} else {
 			if o.Metrics != nil {
 				o.Metrics.IncFailures()
-				o.Metrics.IncReadOnlyBlocks("namespace_budget")
+				o.Metrics.IncReadOnlyBlocks("namespace_budget", req.Spec.Workload.Kind)
 			}
 			req.Status.Phase = ksv1alpha1.PhaseBlocked
 			req.Status.LastError = "namespace budget blocked"
+			req.Status.BlockReasonCode = "namespace_budget_blocked"
 			req.Status.ShadowAction = "would execute rollback-to-healthy but blocked by namespace budget"
 			req.Status.LastGateDecision = fmt.Sprintf("namespace budget exceeded (rate=%d%%, unhealthy=%d, total=%d)", namespaceBlockRate, unhealthyWorkloads, totalWorkloads)
 			o.emitRuntimeEvent(req, "Warning", "NamespaceBudgetBlocked", req.Status.LastGateDecision)
@@ -191,17 +196,34 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		}
 		req.Status.Phase = ksv1alpha1.PhaseBlocked
 		req.Status.LastError = decision.Reason
+		req.Status.BlockReasonCode = "gate_blocked"
 		req.Status.ShadowAction = "would execute rollback-to-healthy but blocked by gate"
 		req.Status.LastGateDecision = fmt.Sprintf("%s (actions=%d,max=%d,affectedPods=%d,clusterPods=%d,maxPodPct=%d)", decision.Reason, runtimeInput.ActionsInWindow, req.Spec.RateLimit.MaxActions, runtimeInput.AffectedPods, runtimeInput.ClusterPods, req.Spec.BlastRadius.MaxPodPercentage)
 		o.emitRuntimeEvent(req, "Warning", "GateBlocked", req.Status.LastGateDecision)
 		o.writeAudit(req, "blocked", req.Status.LastGateDecision)
 		if o.Metrics != nil {
-			o.Metrics.IncReadOnlyBlocks("gate")
+			o.Metrics.IncReadOnlyBlocks("gate", req.Spec.Workload.Kind)
 		}
 		return errors.New(decision.Reason)
 	}
 	o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now(), req.Spec.RateLimit.WindowMinutes)
 	req.Status.LastGateDecision = "allowed"
+
+	if req.Spec.Workload.Kind == "StatefulSet" {
+		if o.Metrics != nil {
+			o.Metrics.IncFailures()
+			o.Metrics.IncReadOnlyBlocks("statefulset_readonly", req.Spec.Workload.Kind)
+		}
+		req.Status.Phase = ksv1alpha1.PhaseBlocked
+		req.Status.LastError = "statefulset is in read-only mode; manual intervention required"
+		req.Status.BlockReasonCode = "statefulset_readonly"
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastEventReason = "statefulset-readonly"
+		req.Status.ShadowAction = "would execute conservative healing action but blocked by statefulset read-only policy"
+		o.emitRuntimeEvent(req, "Warning", "StatefulSetReadOnlyBlocked", req.Status.LastError)
+		o.writeAudit(req, "blocked", req.Status.LastError)
+		return errors.New(req.Status.LastError)
+	}
 
 	snap, err := o.Snapshotter.Create(req.Spec.Workload.Namespace, req.Spec.Workload.Name)
 	if err != nil {
@@ -257,7 +279,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 	if err := o.Adapter.ValidateRevisionDependencies(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name, latest.Revision); err != nil {
 		if o.Metrics != nil {
 			o.Metrics.IncFailures()
-			o.Metrics.IncReadOnlyBlocks("revision_dependency")
+			o.Metrics.IncReadOnlyBlocks("revision_dependency", req.Spec.Workload.Kind)
 		}
 		req.Status.Phase = ksv1alpha1.PhaseL3
 		req.Status.LastError = "revision dependencies unavailable; manual intervention required"
@@ -392,13 +414,14 @@ func (o *Orchestrator) writeAudit(req *ksv1alpha1.HealingRequest, result, afterS
 		return
 	}
 	o.AuditSink.Write(observability.AuditEvent{
-		ID:          req.Status.CorrelationKey,
-		Trigger:     "alertmanager",
-		Target:      req.Spec.Workload.Namespace + "/" + req.Spec.Workload.Name,
-		BeforeState: req.Status.LastEventReason,
-		AfterState:  afterState,
-		Result:      result,
-		CreatedAt:   o.Now(),
+		ID:           req.Status.CorrelationKey,
+		Trigger:      "alertmanager",
+		Target:       req.Spec.Workload.Namespace + "/" + req.Spec.Workload.Name,
+		WorkloadKind: req.Spec.Workload.Kind,
+		BeforeState:  req.Status.LastEventReason,
+		AfterState:   afterState,
+		Result:       result,
+		CreatedAt:    o.Now(),
 	})
 }
 
@@ -464,4 +487,14 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func workloadCapabilityForKind(kind string) string {
+	if kind == "StatefulSet" {
+		return "read-only"
+	}
+	if kind == "Deployment" {
+		return "writable"
+	}
+	return "unsupported"
 }

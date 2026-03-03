@@ -32,12 +32,21 @@ func TestApplyDefaults(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsNonDeployment(t *testing.T) {
+func TestValidateAllowsStatefulSet(t *testing.T) {
 	r := baseRequest()
 	r.Spec.Workload.Kind = "StatefulSet"
 	r.ApplyDefaults()
+	if err := r.Validate(); err != nil {
+		t.Fatalf("expected statefulset to be allowed, got err: %v", err)
+	}
+}
+
+func TestValidateRejectsUnsupportedKind(t *testing.T) {
+	r := baseRequest()
+	r.Spec.Workload.Kind = "Job"
+	r.ApplyDefaults()
 	if err := r.Validate(); err == nil {
-		t.Fatalf("expected validation error for non-deployment")
+		t.Fatalf("expected validation error for unsupported workload kind")
 	}
 }
 

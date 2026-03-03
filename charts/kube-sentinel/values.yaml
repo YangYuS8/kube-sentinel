@@ -9,6 +9,9 @@ webhook:
 
 healingRequest:
   workloadKind: Deployment
+  statefulSetPolicy:
+    enabled: true
+    readOnlyOnly: true
   maintenanceWindows: []
   idempotencyWindowMinutes: 5
   soakTimePolicies:

@@ -96,6 +96,8 @@ type CircuitBreakerStatus struct {
 
 type HealingRequestStatus struct {
 	Phase               HealingPhase         `json:"phase,omitempty"`
+	WorkloadCapability  string               `json:"workloadCapability,omitempty"`
+	BlockReasonCode     string               `json:"blockReasonCode,omitempty"`
 	LastAction          string               `json:"lastAction,omitempty"`
 	LastError           string               `json:"lastError,omitempty"`
 	LastGateDecision    string               `json:"lastGateDecision,omitempty"`
@@ -203,8 +205,8 @@ func (r *HealingRequest) ApplyDefaults() {
 }
 
 func (r *HealingRequest) Validate() error {
-	if r.Spec.Workload.Kind != "Deployment" {
-		return fmt.Errorf("unsupported workload kind %q: only Deployment is allowed in v1alpha1", r.Spec.Workload.Kind)
+	if r.Spec.Workload.Kind != "Deployment" && r.Spec.Workload.Kind != "StatefulSet" {
+		return fmt.Errorf("unsupported workload kind %q: only Deployment or StatefulSet is allowed in v1alpha1", r.Spec.Workload.Kind)
 	}
 	if r.Spec.Workload.Name == "" || r.Spec.Workload.Namespace == "" {
 		return fmt.Errorf("workload namespace/name are required")

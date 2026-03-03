@@ -3,13 +3,14 @@ package observability
 import "time"
 
 type AuditEvent struct {
-	ID          string
-	Trigger     string
-	Target      string
-	BeforeState string
-	AfterState  string
-	Result      string
-	CreatedAt   time.Time
+	ID           string
+	Trigger      string
+	Target       string
+	WorkloadKind string
+	BeforeState  string
+	AfterState   string
+	Result       string
+	CreatedAt    time.Time
 }
 
 type RuntimeEvent struct {

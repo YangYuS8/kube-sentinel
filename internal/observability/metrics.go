@@ -53,7 +53,7 @@ var (
 	readOnlyBlocksCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "kube_sentinel_readonly_blocks_total",
 		Help: "Total number of read-only blocked actions by reason.",
-	}, []string{"reason"})
+	}, []string{"reason", "workload_kind"})
 	strategyDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "kube_sentinel_strategy_duration_seconds",
 		Help:    "Duration of healing strategy execution.",
@@ -114,13 +114,16 @@ func (m *Metrics) IncSuppressed() {
 	suppressedCounter.Inc()
 }
 
-func (m *Metrics) IncReadOnlyBlocks(reason string) {
+func (m *Metrics) IncReadOnlyBlocks(reason, workloadKind string) {
 	registerPrometheusMetrics()
 	atomic.AddUint64(&m.ReadOnlyBlocks, 1)
 	if reason == "" {
 		reason = "unknown"
 	}
-	readOnlyBlocksCounter.WithLabelValues(reason).Inc()
+	if workloadKind == "" {
+		workloadKind = "unknown"
+	}
+	readOnlyBlocksCounter.WithLabelValues(reason, workloadKind).Inc()
 }
 
 func (m *Metrics) ObserveStrategyDuration(stage string, duration time.Duration) {

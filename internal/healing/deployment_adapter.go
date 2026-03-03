@@ -27,7 +27,7 @@ func (DeploymentAdapter) Kind() string {
 }
 
 func (DeploymentAdapter) Supports(kind string) bool {
-	return kind == "Deployment"
+	return kind == "Deployment" || kind == "StatefulSet"
 }
 
 func (d DeploymentAdapter) ListRevisions(ctx context.Context, namespace, name string) ([]RevisionRecord, error) {
@@ -152,16 +152,26 @@ func (d DeploymentAdapter) CountAffectedPods(ctx context.Context, namespace, nam
 		return 0, fmt.Errorf("kubernetes client is required")
 	}
 	deployment := appsv1.Deployment{}
-	if err := d.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, &deployment); err != nil {
-		return 0, err
+	if err := d.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, &deployment); err == nil {
+		if deployment.Status.Replicas > 0 {
+			return int(deployment.Status.Replicas), nil
+		}
+		if deployment.Spec.Replicas != nil && *deployment.Spec.Replicas > 0 {
+			return int(*deployment.Spec.Replicas), nil
+		}
+		return 1, nil
 	}
-	if deployment.Status.Replicas > 0 {
-		return int(deployment.Status.Replicas), nil
+	statefulSet := appsv1.StatefulSet{}
+	if err := d.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, &statefulSet); err == nil {
+		if statefulSet.Status.Replicas > 0 {
+			return int(statefulSet.Status.Replicas), nil
+		}
+		if statefulSet.Spec.Replicas != nil && *statefulSet.Spec.Replicas > 0 {
+			return int(*statefulSet.Spec.Replicas), nil
+		}
+		return 1, nil
 	}
-	if deployment.Spec.Replicas != nil && *deployment.Spec.Replicas > 0 {
-		return int(*deployment.Spec.Replicas), nil
-	}
-	return 1, nil
+	return 0, fmt.Errorf("workload %s/%s not found as Deployment or StatefulSet", namespace, name)
 }
 
 func (d DeploymentAdapter) CountClusterPods(ctx context.Context, namespace string) (int, error) {
@@ -186,10 +196,15 @@ func (d DeploymentAdapter) CountTotalWorkloads(ctx context.Context, namespace st
 	if err := d.Client.List(ctx, &deployments, client.InNamespace(namespace)); err != nil {
 		return 0, err
 	}
-	if len(deployments.Items) == 0 {
+	statefulSets := appsv1.StatefulSetList{}
+	if err := d.Client.List(ctx, &statefulSets, client.InNamespace(namespace)); err != nil {
+		return 0, err
+	}
+	total := len(deployments.Items) + len(statefulSets.Items)
+	if total == 0 {
 		return 1, nil
 	}
-	return len(deployments.Items), nil
+	return total, nil
 }
 
 func (d DeploymentAdapter) CountUnhealthyWorkloads(ctx context.Context, namespace string) (int, error) {
@@ -200,6 +215,10 @@ func (d DeploymentAdapter) CountUnhealthyWorkloads(ctx context.Context, namespac
 	if err := d.Client.List(ctx, &deployments, client.InNamespace(namespace)); err != nil {
 		return 0, err
 	}
+	statefulSets := appsv1.StatefulSetList{}
+	if err := d.Client.List(ctx, &statefulSets, client.InNamespace(namespace)); err != nil {
+		return 0, err
+	}
 	unhealthy := 0
 	for _, dep := range deployments.Items {
 		specReplicas := int32(1)
@@ -207,6 +226,15 @@ func (d DeploymentAdapter) CountUnhealthyWorkloads(ctx context.Context, namespac
 			specReplicas = *dep.Spec.Replicas
 		}
 		if dep.Status.AvailableReplicas < specReplicas {
+			unhealthy++
+		}
+	}
+	for _, st := range statefulSets.Items {
+		specReplicas := int32(1)
+		if st.Spec.Replicas != nil {
+			specReplicas = *st.Spec.Replicas
+		}
+		if st.Status.ReadyReplicas < specReplicas {
 			unhealthy++
 		}
 	}
