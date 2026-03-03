@@ -1,0 +1,30 @@
+schema: spec-driven
+
+context: |
+  项目目标：构建 Kube-Sentinel，一个基于事件驱动的 K8s 故障自愈控制器。
+  核心技术栈：
+    - 语言：Go 1.22+ (强制使用 Controller-runtime 框架)
+    - 交互：Client-go (用于声明式 API 操作)
+    - 存储：ETCD (作为 K8s 原生存储)
+    - 监控集成：Prometheus Alertmanager Webhook
+  领域知识：
+    - 遵循 Kubernetes Operator Pattern
+    - 采用声明式 API 设计 (Custom Resource Definitions)
+
+rules:
+  # 针对自愈逻辑的严谨性要求
+  self_healing_logic:
+    - 必须支持“多级策略联动”：L1(重启容器) -> L2(镜像回滚) -> L3(人工介入)
+    - 所有的自愈动作执行前，必须通过“回滚性校验”：自动创建当前资源的完整备份 (Snapshot)
+    - 执行动作必须具备“幂等性”：多次触发同一策略，结果应保持一致
+
+  # 针对运维安全性要求
+  safety_gate:
+    - 必须引入“维护窗口”：允许用户定义禁止自动操作的时间段（如双11期间）
+    - 必须实现“速率限制”：禁止在 10 分钟内对同一 Deployment 执行超过 3 次自愈动作
+    - 必须包含“爆炸半径控制”：单次自愈动作影响的 Pod 比例不得超过集群总数的 10%
+
+  # 针对任务拆解规范
+  tasks:
+    - 每个开发任务必须包含对应的 Unit Test (单元测试) 方案
+    - 所有的 API 变更必须同步更新 Helm Chart 的 values.yaml 约束
