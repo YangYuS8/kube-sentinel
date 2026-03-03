@@ -1,0 +1,13 @@
+{
+  "chat.tools.terminal.autoApprove": {
+    "/^python - <<'PY'\nfrom pathlib import Path\nimport sys\ntry:\n    import yaml\nexcept Exception as e:\n    print\\('PyYAML not available:', e\\)\n    sys\\.exit\\(0\\)\npath = Path\\('openspec/config\\.yaml'\\)\nwith path\\.open\\('r', encoding='utf-8'\\) as f:\n    yaml\\.safe_load\\(f\\)\nprint\\('YAML OK'\\)\nPY$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^python - <<'PY'\nfrom pathlib import Path\nimport yaml\np=Path\\('openspec/config\\.yaml'\\)\nyaml\\.safe_load\\(p\\.read_text\\(encoding='utf-8'\\)\\)\nprint\\('YAML OK'\\)\nPY$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "openspec-cn": true
+  }
+}
