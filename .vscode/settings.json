@@ -18,6 +18,7 @@
     "mv": true,
     "golangci-lint": true,
     "gofmt": true,
-    "cp": true
+    "cp": true,
+    "test": true
   }
 }
