@@ -22,6 +22,44 @@
             "pattern": "^\\d{2}:\\d{2}-\\d{2}:\\d{2}$"
           }
         },
+        "soakTimePolicies": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "category": { "type": "string", "minLength": 1 },
+              "severity": { "type": "string", "minLength": 1 },
+              "durationSec": { "type": "integer", "minimum": 1 },
+              "minSamples": { "type": "integer", "minimum": 1 }
+            },
+            "required": ["category", "severity", "durationSec", "minSamples"]
+          }
+        },
+        "namespaceBudget": {
+          "type": "object",
+          "properties": {
+            "blockingThresholdPercent": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "minTotalWorkloads": { "type": "integer", "minimum": 1 },
+            "fallbackUnhealthyCount": { "type": "integer", "minimum": 1 }
+          },
+          "required": [
+            "blockingThresholdPercent",
+            "minTotalWorkloads",
+            "fallbackUnhealthyCount"
+          ]
+        },
+        "emergencyTry": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "maxAttempts": { "type": "integer", "minimum": 1 }
+          },
+          "required": ["enabled", "maxAttempts"]
+        },
         "idempotencyWindowMinutes": { "type": "integer", "minimum": 1 },
         "rateLimit": {
           "type": "object",
@@ -69,6 +107,9 @@
       "required": [
         "workloadKind",
         "maintenanceWindows",
+        "soakTimePolicies",
+        "namespaceBudget",
+        "emergencyTry",
         "idempotencyWindowMinutes",
         "rateLimit",
         "blastRadius",

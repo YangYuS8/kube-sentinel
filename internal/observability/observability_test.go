@@ -13,8 +13,10 @@ func TestMetricsIncrement(t *testing.T) {
 	m.IncRollbacks()
 	m.IncCircuitBreaks()
 	m.IncMaintenanceWindowConflicts()
+	m.IncSuppressed()
+	m.IncReadOnlyBlocks("gate")
 	m.ObserveStrategyDuration("process", time.Second)
-	if m.Triggers != 1 || m.Success != 1 || m.Failures != 1 || m.Rollbacks != 1 || m.CircuitBreaks != 1 || m.MaintenanceWindowConflicts != 1 {
+	if m.Triggers != 1 || m.Success != 1 || m.Failures != 1 || m.Rollbacks != 1 || m.CircuitBreaks != 1 || m.MaintenanceWindowConflicts != 1 || m.Suppressed != 1 || m.ReadOnlyBlocks != 1 {
 		t.Fatalf("metrics counters not incremented")
 	}
 }

@@ -15,6 +15,8 @@ type Metrics struct {
 	Rollbacks                  uint64
 	CircuitBreaks              uint64
 	MaintenanceWindowConflicts uint64
+	Suppressed                 uint64
+	ReadOnlyBlocks             uint64
 }
 
 var (
@@ -44,6 +46,14 @@ var (
 		Name: "kube_sentinel_maintenance_window_conflict_total",
 		Help: "Total number of blocked actions due to maintenance windows.",
 	})
+	suppressedCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "kube_sentinel_suppressed_total",
+		Help: "Total number of suppressed actions during soak verification.",
+	})
+	readOnlyBlocksCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kube_sentinel_readonly_blocks_total",
+		Help: "Total number of read-only blocked actions by reason.",
+	}, []string{"reason"})
 	strategyDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "kube_sentinel_strategy_duration_seconds",
 		Help:    "Duration of healing strategy execution.",
@@ -60,6 +70,8 @@ func registerPrometheusMetrics() {
 			rollbacksCounter,
 			circuitBreaksCounter,
 			maintenanceWindowConflictsCounter,
+			suppressedCounter,
+			readOnlyBlocksCounter,
 			strategyDurationHistogram,
 		)
 	})
@@ -94,6 +106,21 @@ func (m *Metrics) IncMaintenanceWindowConflicts() {
 	registerPrometheusMetrics()
 	atomic.AddUint64(&m.MaintenanceWindowConflicts, 1)
 	maintenanceWindowConflictsCounter.Inc()
+}
+
+func (m *Metrics) IncSuppressed() {
+	registerPrometheusMetrics()
+	atomic.AddUint64(&m.Suppressed, 1)
+	suppressedCounter.Inc()
+}
+
+func (m *Metrics) IncReadOnlyBlocks(reason string) {
+	registerPrometheusMetrics()
+	atomic.AddUint64(&m.ReadOnlyBlocks, 1)
+	if reason == "" {
+		reason = "unknown"
+	}
+	readOnlyBlocksCounter.WithLabelValues(reason).Inc()
 }
 
 func (m *Metrics) ObserveStrategyDuration(stage string, duration time.Duration) {

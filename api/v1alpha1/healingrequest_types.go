@@ -10,12 +10,14 @@ import (
 type HealingPhase string
 
 const (
-	PhasePending   HealingPhase = "Pending"
-	PhaseL1        HealingPhase = "L1"
-	PhaseL2        HealingPhase = "L2"
-	PhaseL3        HealingPhase = "L3"
-	PhaseCompleted HealingPhase = "Completed"
-	PhaseBlocked   HealingPhase = "Blocked"
+	PhasePending       HealingPhase = "Pending"
+	PhasePendingVerify HealingPhase = "PendingVerify"
+	PhaseSuppressed    HealingPhase = "Suppressed"
+	PhaseL1            HealingPhase = "L1"
+	PhaseL2            HealingPhase = "L2"
+	PhaseL3            HealingPhase = "L3"
+	PhaseCompleted     HealingPhase = "Completed"
+	PhaseBlocked       HealingPhase = "Blocked"
 )
 
 type BreakerScope string
@@ -52,14 +54,35 @@ type HealthyRevisionSpec struct {
 	RequireNoCriticalAlerts bool `json:"requireNoCriticalAlerts"`
 }
 
+type SoakTimePolicySpec struct {
+	Category    string `json:"category"`
+	Severity    string `json:"severity"`
+	DurationSec int    `json:"durationSec"`
+	MinSamples  int    `json:"minSamples"`
+}
+
+type NamespaceBudgetSpec struct {
+	BlockingThresholdPercent int `json:"blockingThresholdPercent"`
+	MinTotalWorkloads        int `json:"minTotalWorkloads"`
+	FallbackUnhealthyCount   int `json:"fallbackUnhealthyCount"`
+}
+
+type EmergencyTrySpec struct {
+	Enabled     bool `json:"enabled"`
+	MaxAttempts int  `json:"maxAttempts"`
+}
+
 type HealingRequestSpec struct {
-	Workload                 WorkloadRef         `json:"workload"`
-	MaintenanceWindows       []string            `json:"maintenanceWindows,omitempty"`
-	IdempotencyWindowMinutes int                 `json:"idempotencyWindowMinutes,omitempty"`
-	RateLimit                RateLimitSpec       `json:"rateLimit"`
-	BlastRadius              BlastRadiusSpec     `json:"blastRadius"`
-	CircuitBreaker           CircuitBreakerSpec  `json:"circuitBreaker"`
-	HealthyRevision          HealthyRevisionSpec `json:"healthyRevision"`
+	Workload                 WorkloadRef          `json:"workload"`
+	MaintenanceWindows       []string             `json:"maintenanceWindows,omitempty"`
+	IdempotencyWindowMinutes int                  `json:"idempotencyWindowMinutes,omitempty"`
+	RateLimit                RateLimitSpec        `json:"rateLimit"`
+	BlastRadius              BlastRadiusSpec      `json:"blastRadius"`
+	CircuitBreaker           CircuitBreakerSpec   `json:"circuitBreaker"`
+	HealthyRevision          HealthyRevisionSpec  `json:"healthyRevision"`
+	SoakTimePolicies         []SoakTimePolicySpec `json:"soakTimePolicies,omitempty"`
+	NamespaceBudget          NamespaceBudgetSpec  `json:"namespaceBudget"`
+	EmergencyTry             EmergencyTrySpec     `json:"emergencyTry"`
 }
 
 type CircuitBreakerStatus struct {
@@ -78,6 +101,12 @@ type HealingRequestStatus struct {
 	LastGateDecision    string               `json:"lastGateDecision,omitempty"`
 	LastEvidenceStatus  string               `json:"lastEvidenceStatus,omitempty"`
 	LastEventReason     string               `json:"lastEventReason,omitempty"`
+	PendingSince        string               `json:"pendingSince,omitempty"`
+	SuppressedAt        string               `json:"suppressedAt,omitempty"`
+	StableSampleCount   int                  `json:"stableSampleCount,omitempty"`
+	ShadowAction        string               `json:"shadowAction,omitempty"`
+	NamespaceBlockRate  int                  `json:"namespaceBlockRate,omitempty"`
+	EmergencyAttempts   int                  `json:"emergencyAttempts,omitempty"`
 	CorrelationKey      string               `json:"correlationKey,omitempty"`
 	LastHealthyRevision string               `json:"lastHealthyRevision,omitempty"`
 	AuditRef            string               `json:"auditRef,omitempty"`
@@ -109,6 +138,7 @@ func (r *HealingRequest) DeepCopyObject() runtime.Object {
 	}
 	out := *r
 	out.Spec.MaintenanceWindows = append([]string(nil), r.Spec.MaintenanceWindows...)
+	out.Spec.SoakTimePolicies = append([]SoakTimePolicySpec(nil), r.Spec.SoakTimePolicies...)
 	out.Status.Conditions = append([]metav1.Condition(nil), r.Status.Conditions...)
 	return &out
 }
@@ -150,6 +180,26 @@ func (r *HealingRequest) ApplyDefaults() {
 	if r.Spec.HealthyRevision.ObserveMinutes == 0 {
 		r.Spec.HealthyRevision.ObserveMinutes = 5
 	}
+	if len(r.Spec.SoakTimePolicies) == 0 {
+		r.Spec.SoakTimePolicies = []SoakTimePolicySpec{
+			{Category: "CrashLoopBackOff", Severity: "Critical", DurationSec: 30, MinSamples: 2},
+			{Category: "OOMKilled", Severity: "High", DurationSec: 60, MinSamples: 2},
+			{Category: "ProbeFailure", Severity: "Medium", DurationSec: 120, MinSamples: 3},
+			{Category: "Pending", Severity: "Low", DurationSec: 300, MinSamples: 3},
+		}
+	}
+	if r.Spec.NamespaceBudget.BlockingThresholdPercent == 0 {
+		r.Spec.NamespaceBudget.BlockingThresholdPercent = 30
+	}
+	if r.Spec.NamespaceBudget.MinTotalWorkloads == 0 {
+		r.Spec.NamespaceBudget.MinTotalWorkloads = 5
+	}
+	if r.Spec.NamespaceBudget.FallbackUnhealthyCount == 0 {
+		r.Spec.NamespaceBudget.FallbackUnhealthyCount = 2
+	}
+	if r.Spec.EmergencyTry.MaxAttempts == 0 {
+		r.Spec.EmergencyTry.MaxAttempts = 1
+	}
 }
 
 func (r *HealingRequest) Validate() error {
@@ -182,6 +232,26 @@ func (r *HealingRequest) Validate() error {
 	}
 	if r.Spec.HealthyRevision.ObserveMinutes < 1 {
 		return fmt.Errorf("healthyRevision.observeMinutes must be >= 1")
+	}
+	if r.Spec.NamespaceBudget.BlockingThresholdPercent < 1 || r.Spec.NamespaceBudget.BlockingThresholdPercent > 100 {
+		return fmt.Errorf("namespaceBudget.blockingThresholdPercent must be between 1 and 100")
+	}
+	if r.Spec.NamespaceBudget.MinTotalWorkloads < 1 {
+		return fmt.Errorf("namespaceBudget.minTotalWorkloads must be >= 1")
+	}
+	if r.Spec.NamespaceBudget.FallbackUnhealthyCount < 1 {
+		return fmt.Errorf("namespaceBudget.fallbackUnhealthyCount must be >= 1")
+	}
+	if r.Spec.EmergencyTry.MaxAttempts < 1 {
+		return fmt.Errorf("emergencyTry.maxAttempts must be >= 1")
+	}
+	for _, policy := range r.Spec.SoakTimePolicies {
+		if policy.DurationSec < 1 {
+			return fmt.Errorf("soakTimePolicies.durationSec must be >= 1")
+		}
+		if policy.MinSamples < 1 {
+			return fmt.Errorf("soakTimePolicies.minSamples must be >= 1")
+		}
 	}
 	return nil
 }

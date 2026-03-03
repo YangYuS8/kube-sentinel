@@ -110,5 +110,60 @@ func TestDeploymentAdapterCountPods(t *testing.T) {
 	}
 }
 
+func TestDeploymentAdapterValidateRevisionDependencies(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = appsv1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default", UID: types.UID("dep-uid")},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "app"}},
+			Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"version": "new"}}},
+		},
+	}
+	rs := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "app-rs-1",
+			Namespace: "default",
+			Annotations: map[string]string{
+				deploymentRevisionAnnotation: "2",
+			},
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "app", UID: dep.UID, Controller: ptrBool(true)}},
+		},
+		Spec: appsv1.ReplicaSetSpec{Template: corev1.PodTemplateSpec{
+			Spec: corev1.PodSpec{
+				Volumes:    []corev1.Volume{{Name: "cfg", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "cfg"}}}}},
+				Containers: []corev1.Container{{Name: "app", EnvFrom: []corev1.EnvFromSource{{SecretRef: &corev1.SecretEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "sec"}}}}}},
+			},
+		}},
+	}
+	cfg := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "cfg", Namespace: "default"}}
+	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "sec", Namespace: "default"}}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(dep, rs, cfg, sec).Build()
+	adapter := NewDeploymentAdapter(cl)
+	if err := adapter.ValidateRevisionDependencies(context.Background(), "default", "app", "2"); err != nil {
+		t.Fatalf("expected dependencies valid, got %v", err)
+	}
+}
+
+func TestDeploymentAdapterCountWorkloads(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = appsv1.AddToScheme(scheme)
+	dep1Replicas := int32(3)
+	dep2Replicas := int32(2)
+	dep1 := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "app1", Namespace: "default"}, Spec: appsv1.DeploymentSpec{Replicas: &dep1Replicas}, Status: appsv1.DeploymentStatus{AvailableReplicas: 1}}
+	dep2 := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "app2", Namespace: "default"}, Spec: appsv1.DeploymentSpec{Replicas: &dep2Replicas}, Status: appsv1.DeploymentStatus{AvailableReplicas: 2}}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(dep1, dep2).Build()
+	adapter := NewDeploymentAdapter(cl)
+	total, err := adapter.CountTotalWorkloads(context.Background(), "default")
+	if err != nil || total != 2 {
+		t.Fatalf("expected total workloads 2, got %d err=%v", total, err)
+	}
+	unhealthy, err := adapter.CountUnhealthyWorkloads(context.Background(), "default")
+	if err != nil || unhealthy != 1 {
+		t.Fatalf("expected unhealthy workloads 1, got %d err=%v", unhealthy, err)
+	}
+}
+
 func ptrBool(v bool) *bool    { return &v }
 func ptrInt32(v int32) *int32 { return &v }

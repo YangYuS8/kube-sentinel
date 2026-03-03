@@ -11,6 +11,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	ksv1alpha1 "github.com/yangyus8/kube-sentinel/api/v1alpha1"
@@ -117,5 +118,33 @@ func TestUpsertUpdatesCorrelationKey(t *testing.T) {
 	r := &Receiver{Client: client, Dedupe: NewMemoryDedupeStore(), Now: time.Now}
 	if err := r.upsertHealingRequest(context.Background(), Event{CorrelationKey: "fp", WorkloadKind: "Deployment", Namespace: "default", Name: "app", Reason: "test"}); err != nil {
 		t.Fatalf("upsert failed: %v", err)
+	}
+}
+
+func TestWebhookPropagatesAlertMetadataAnnotations(t *testing.T) {
+	r := buildReceiver(t)
+	payload := AlertmanagerPayload{Alerts: []Alert{{
+		Status:      "firing",
+		Fingerprint: "fp-meta",
+		Labels: map[string]string{
+			"workload_kind": "Deployment",
+			"namespace":     "default",
+			"name":          "app",
+			"alertname":     "CrashLoopBackOff",
+			"severity":      "Critical",
+		},
+	}}}
+	body, _ := json.Marshal(payload)
+	w := httptest.NewRecorder()
+	r.HandleWebhook(w, httptest.NewRequest(http.MethodPost, "/alertmanager/webhook", bytes.NewReader(body)))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected accepted")
+	}
+	var obj ksv1alpha1.HealingRequest
+	if err := r.Client.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "hr-app"}, &obj); err != nil {
+		t.Fatalf("get healingrequest failed: %v", err)
+	}
+	if obj.Annotations["kube-sentinel.io/alert-category"] != "CrashLoopBackOff" || obj.Annotations["kube-sentinel.io/alert-severity"] != "Critical" || obj.Annotations["kube-sentinel.io/alert-status"] != "firing" {
+		t.Fatalf("expected alert metadata annotations")
 	}
 }

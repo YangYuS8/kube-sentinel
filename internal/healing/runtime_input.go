@@ -8,9 +8,11 @@ import (
 )
 
 type RuntimeInput struct {
-	ActionsInWindow int
-	AffectedPods    int
-	ClusterPods     int
+	ActionsInWindow    int
+	AffectedPods       int
+	ClusterPods        int
+	TotalWorkloads     int
+	UnhealthyWorkloads int
 }
 
 type RuntimeInputProvider interface {
@@ -33,9 +35,19 @@ func (p adapterRuntimeInputProvider) Build(ctx context.Context, req *ksv1alpha1.
 	if err != nil {
 		return RuntimeInput{}, err
 	}
+	totalWorkloads, err := p.adapter.CountTotalWorkloads(ctx, req.Spec.Workload.Namespace)
+	if err != nil {
+		return RuntimeInput{}, err
+	}
+	unhealthyWorkloads, err := p.adapter.CountUnhealthyWorkloads(ctx, req.Spec.Workload.Namespace)
+	if err != nil {
+		return RuntimeInput{}, err
+	}
 	return RuntimeInput{
-		ActionsInWindow: 0,
-		AffectedPods:    affectedPods,
-		ClusterPods:     clusterPods,
+		ActionsInWindow:    0,
+		AffectedPods:       affectedPods,
+		ClusterPods:        clusterPods,
+		TotalWorkloads:     totalWorkloads,
+		UnhealthyWorkloads: unhealthyWorkloads,
 	}, nil
 }

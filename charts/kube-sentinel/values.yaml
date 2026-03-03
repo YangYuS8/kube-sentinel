@@ -11,6 +11,30 @@ healingRequest:
   workloadKind: Deployment
   maintenanceWindows: []
   idempotencyWindowMinutes: 5
+  soakTimePolicies:
+    - category: CrashLoopBackOff
+      severity: Critical
+      durationSec: 30
+      minSamples: 2
+    - category: OOMKilled
+      severity: High
+      durationSec: 60
+      minSamples: 2
+    - category: ProbeFailure
+      severity: Medium
+      durationSec: 120
+      minSamples: 3
+    - category: Pending
+      severity: Low
+      durationSec: 300
+      minSamples: 3
+  namespaceBudget:
+    blockingThresholdPercent: 30
+    minTotalWorkloads: 5
+    fallbackUnhealthyCount: 2
+  emergencyTry:
+    enabled: false
+    maxAttempts: 1
   rateLimit:
     maxActions: 3
     windowMinutes: 10

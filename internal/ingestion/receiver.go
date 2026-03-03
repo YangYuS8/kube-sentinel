@@ -101,6 +101,9 @@ func mapAlert(alert Alert) (Event, error) {
 		Namespace:      ns,
 		Name:           name,
 		Reason:         reason,
+		AlertStatus:    strings.TrimSpace(alert.Status),
+		AlertCategory:  strings.TrimSpace(alert.Labels["alertname"]),
+		AlertSeverity:  strings.TrimSpace(alert.Labels["severity"]),
 	}, nil
 }
 
@@ -112,6 +115,9 @@ func (r *Receiver) upsertHealingRequest(ctx context.Context, event Event) error 
 	if err == nil {
 		obj.Annotations = ensureMap(obj.Annotations)
 		obj.Annotations["kube-sentinel.io/correlation-key"] = event.CorrelationKey
+		obj.Annotations["kube-sentinel.io/alert-status"] = event.AlertStatus
+		obj.Annotations["kube-sentinel.io/alert-category"] = event.AlertCategory
+		obj.Annotations["kube-sentinel.io/alert-severity"] = event.AlertSeverity
 		obj.Status.CorrelationKey = event.CorrelationKey
 		obj.Status.LastEventReason = event.Reason
 		return r.Client.Update(ctx, &obj)
@@ -123,6 +129,9 @@ func (r *Receiver) upsertHealingRequest(ctx context.Context, event Event) error 
 			Namespace: event.Namespace,
 			Annotations: map[string]string{
 				"kube-sentinel.io/correlation-key": event.CorrelationKey,
+				"kube-sentinel.io/alert-status":    event.AlertStatus,
+				"kube-sentinel.io/alert-category":  event.AlertCategory,
+				"kube-sentinel.io/alert-severity":  event.AlertSeverity,
 			},
 		},
 		Spec: ksv1alpha1.HealingRequestSpec{

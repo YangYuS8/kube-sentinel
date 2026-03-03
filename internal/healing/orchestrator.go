@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -119,6 +120,58 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		return err
 	}
 	runtimeInput.ActionsInWindow = o.actionsInWindow(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now(), req.Spec.RateLimit.WindowMinutes)
+	if hasAlertMetadata(req) && isResolvedAlert(req) {
+		req.Status.Phase = ksv1alpha1.PhaseSuppressed
+		req.Status.SuppressedAt = o.Now().Format(time.RFC3339)
+		req.Status.LastAction = "suppressed"
+		req.Status.LastEventReason = "suppressed-during-soak"
+		req.Status.LastEvidenceStatus = "suppressed"
+		o.emitRuntimeEvent(req, "Normal", "Suppressed", "alert recovered during observation window")
+		o.writeAudit(req, "suppressed", "alert recovered during observation window")
+		if o.Metrics != nil {
+			o.Metrics.IncSuppressed()
+		}
+		return nil
+	}
+	if hasAlertMetadata(req) {
+		soakDuration, minSamples := soakProfileFor(req)
+		if pending, done := o.advanceSoakWindow(req, soakDuration, minSamples); !done {
+			if pending {
+				o.emitRuntimeEvent(req, "Normal", "PendingVerify", req.Status.LastGateDecision)
+				o.writeAudit(req, "pending-verify", req.Status.LastGateDecision)
+			}
+			return nil
+		}
+	}
+	totalWorkloads := maxInt(runtimeInput.TotalWorkloads, 1)
+	unhealthyWorkloads := runtimeInput.UnhealthyWorkloads
+	namespaceBlockRate := unhealthyWorkloads * 100 / totalWorkloads
+	req.Status.NamespaceBlockRate = namespaceBlockRate
+	blockedByNamespaceBudget := false
+	if totalWorkloads < req.Spec.NamespaceBudget.MinTotalWorkloads {
+		blockedByNamespaceBudget = unhealthyWorkloads >= req.Spec.NamespaceBudget.FallbackUnhealthyCount
+	} else {
+		blockedByNamespaceBudget = namespaceBlockRate >= req.Spec.NamespaceBudget.BlockingThresholdPercent
+	}
+	if blockedByNamespaceBudget {
+		if req.Spec.EmergencyTry.Enabled && isCriticalWorkload(req) && req.Status.EmergencyAttempts < req.Spec.EmergencyTry.MaxAttempts {
+			req.Status.EmergencyAttempts++
+			req.Status.ShadowAction = "namespace budget blocked, emergency bypass granted"
+			o.emitRuntimeEvent(req, "Warning", "EmergencyBypass", req.Status.ShadowAction)
+		} else {
+			if o.Metrics != nil {
+				o.Metrics.IncFailures()
+				o.Metrics.IncReadOnlyBlocks("namespace_budget")
+			}
+			req.Status.Phase = ksv1alpha1.PhaseBlocked
+			req.Status.LastError = "namespace budget blocked"
+			req.Status.ShadowAction = "would execute rollback-to-healthy but blocked by namespace budget"
+			req.Status.LastGateDecision = fmt.Sprintf("namespace budget exceeded (rate=%d%%, unhealthy=%d, total=%d)", namespaceBlockRate, unhealthyWorkloads, totalWorkloads)
+			o.emitRuntimeEvent(req, "Warning", "NamespaceBudgetBlocked", req.Status.LastGateDecision)
+			o.writeAudit(req, "blocked", req.Status.LastGateDecision)
+			return errors.New(req.Status.LastError)
+		}
+	}
 	decision := safety.Evaluate(safety.GateInput{
 		Now:                o.Now(),
 		MaintenanceWindows: req.Spec.MaintenanceWindows,
@@ -138,9 +191,13 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		}
 		req.Status.Phase = ksv1alpha1.PhaseBlocked
 		req.Status.LastError = decision.Reason
+		req.Status.ShadowAction = "would execute rollback-to-healthy but blocked by gate"
 		req.Status.LastGateDecision = fmt.Sprintf("%s (actions=%d,max=%d,affectedPods=%d,clusterPods=%d,maxPodPct=%d)", decision.Reason, runtimeInput.ActionsInWindow, req.Spec.RateLimit.MaxActions, runtimeInput.AffectedPods, runtimeInput.ClusterPods, req.Spec.BlastRadius.MaxPodPercentage)
 		o.emitRuntimeEvent(req, "Warning", "GateBlocked", req.Status.LastGateDecision)
 		o.writeAudit(req, "blocked", req.Status.LastGateDecision)
+		if o.Metrics != nil {
+			o.Metrics.IncReadOnlyBlocks("gate")
+		}
 		return errors.New(decision.Reason)
 	}
 	o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now(), req.Spec.RateLimit.WindowMinutes)
@@ -197,6 +254,20 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		return nil
 	}
 	req.Status.LastEvidenceStatus = "healthy-revision-selected"
+	if err := o.Adapter.ValidateRevisionDependencies(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name, latest.Revision); err != nil {
+		if o.Metrics != nil {
+			o.Metrics.IncFailures()
+			o.Metrics.IncReadOnlyBlocks("revision_dependency")
+		}
+		req.Status.Phase = ksv1alpha1.PhaseL3
+		req.Status.LastError = "revision dependencies unavailable; manual intervention required"
+		req.Status.LastEvidenceStatus = "insufficient-evidence"
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastEventReason = "revision-dependency-missing"
+		o.emitRuntimeEvent(req, "Warning", "L3Fallback", req.Status.LastError)
+		o.writeAudit(req, "fallback", req.Status.LastError)
+		return nil
+	}
 	if err := o.Adapter.RollbackToRevision(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name, latest.Revision); err != nil {
 		logger.Error(err, "rollback to healthy revision failed", "revision", latest.Revision)
 		if o.Metrics != nil {
@@ -224,6 +295,35 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 	o.writeAudit(req, "success", "rolled-back")
 	o.emitRuntimeEvent(req, "Normal", "ClosedLoopCompleted", "runtime closed-loop completed")
 	return nil
+}
+
+func (o *Orchestrator) advanceSoakWindow(req *ksv1alpha1.HealingRequest, duration time.Duration, minSamples int) (bool, bool) {
+	now := o.Now()
+	if req.Status.PendingSince == "" {
+		req.Status.PendingSince = now.Format(time.RFC3339)
+		req.Status.StableSampleCount = 1
+		req.Status.Phase = ksv1alpha1.PhasePendingVerify
+		req.Status.LastGateDecision = fmt.Sprintf("pending verify (soak=%s,minSamples=%d)", duration.String(), minSamples)
+		return true, false
+	}
+	pendingAt, err := time.Parse(time.RFC3339, req.Status.PendingSince)
+	if err != nil {
+		req.Status.PendingSince = now.Format(time.RFC3339)
+		req.Status.StableSampleCount = 1
+		req.Status.Phase = ksv1alpha1.PhasePendingVerify
+		req.Status.LastGateDecision = fmt.Sprintf("pending verify (soak=%s,minSamples=%d)", duration.String(), minSamples)
+		return true, false
+	}
+	req.Status.StableSampleCount++
+	if now.Sub(pendingAt) < duration || req.Status.StableSampleCount < minSamples {
+		req.Status.Phase = ksv1alpha1.PhasePendingVerify
+		req.Status.LastGateDecision = fmt.Sprintf("pending verify (soak=%s,stableSamples=%d/%d)", duration.String(), req.Status.StableSampleCount, minSamples)
+		return false, false
+	}
+	req.Status.PendingSince = ""
+	req.Status.StableSampleCount = 0
+	req.Status.LastEvidenceStatus = "soak-window-passed"
+	return false, true
 }
 
 func (o *Orchestrator) breakerFor(req *ksv1alpha1.HealingRequest) *safety.CircuitBreaker {
@@ -319,4 +419,49 @@ func (o *Orchestrator) emitRuntimeEvent(req *ksv1alpha1.HealingRequest, eventTyp
 	if o.K8sEventRecorder != nil {
 		o.K8sEventRecorder.Eventf(req, eventType, reason, "%s", message)
 	}
+}
+
+func isResolvedAlert(req *ksv1alpha1.HealingRequest) bool {
+	if req.Annotations == nil {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(req.Annotations["kube-sentinel.io/alert-status"]))
+	return status == "resolved"
+}
+
+func hasAlertMetadata(req *ksv1alpha1.HealingRequest) bool {
+	if req.Annotations == nil {
+		return false
+	}
+	status := strings.TrimSpace(req.Annotations["kube-sentinel.io/alert-status"])
+	return status != ""
+}
+
+func isCriticalWorkload(req *ksv1alpha1.HealingRequest) bool {
+	if req.Annotations == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(req.Annotations["kube-sentinel.io/criticality"]), "high")
+}
+
+func soakProfileFor(req *ksv1alpha1.HealingRequest) (time.Duration, int) {
+	category := ""
+	severity := ""
+	if req.Annotations != nil {
+		category = req.Annotations["kube-sentinel.io/alert-category"]
+		severity = req.Annotations["kube-sentinel.io/alert-severity"]
+	}
+	for _, profile := range req.Spec.SoakTimePolicies {
+		if strings.EqualFold(profile.Category, category) && strings.EqualFold(profile.Severity, severity) {
+			return time.Duration(profile.DurationSec) * time.Second, profile.MinSamples
+		}
+	}
+	return 120 * time.Second, 3
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }

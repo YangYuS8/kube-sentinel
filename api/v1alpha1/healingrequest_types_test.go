@@ -21,6 +21,15 @@ func TestApplyDefaults(t *testing.T) {
 	if r.Spec.CircuitBreaker.Scope != BreakerScopeNamespace {
 		t.Fatalf("circuit breaker scope default not applied")
 	}
+	if len(r.Spec.SoakTimePolicies) == 0 {
+		t.Fatalf("soak time policies default not applied")
+	}
+	if r.Spec.NamespaceBudget.BlockingThresholdPercent != 30 || r.Spec.NamespaceBudget.MinTotalWorkloads != 5 || r.Spec.NamespaceBudget.FallbackUnhealthyCount != 2 {
+		t.Fatalf("namespace budget defaults not applied")
+	}
+	if r.Spec.EmergencyTry.MaxAttempts != 1 {
+		t.Fatalf("emergency try defaults not applied")
+	}
 }
 
 func TestValidateRejectsNonDeployment(t *testing.T) {
@@ -53,5 +62,10 @@ func TestValidateBoundaries(t *testing.T) {
 	r.Spec.HealthyRevision.ObserveMinutes = 0
 	if err := r.Validate(); err == nil {
 		t.Fatalf("expected healthy revision observe window validation error")
+	}
+	r.Spec.HealthyRevision.ObserveMinutes = 5
+	r.Spec.NamespaceBudget.BlockingThresholdPercent = 101
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected namespace budget threshold validation error")
 	}
 }

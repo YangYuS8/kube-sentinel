@@ -18,4 +18,7 @@ type Event struct {
 	Namespace      string
 	Name           string
 	Reason         string
+	AlertStatus    string
+	AlertCategory  string
+	AlertSeverity  string
 }
