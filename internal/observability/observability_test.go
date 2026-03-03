@@ -1,14 +1,20 @@
 package observability
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestMetricsIncrement(t *testing.T) {
 	m := &Metrics{}
 	m.IncTriggers()
 	m.IncSuccess()
+	m.IncFailures()
 	m.IncRollbacks()
 	m.IncCircuitBreaks()
-	if m.Triggers != 1 || m.Success != 1 || m.Rollbacks != 1 || m.CircuitBreaks != 1 {
+	m.IncMaintenanceWindowConflicts()
+	m.ObserveStrategyDuration("process", time.Second)
+	if m.Triggers != 1 || m.Success != 1 || m.Failures != 1 || m.Rollbacks != 1 || m.CircuitBreaks != 1 || m.MaintenanceWindowConflicts != 1 {
 		t.Fatalf("metrics counters not incremented")
 	}
 }

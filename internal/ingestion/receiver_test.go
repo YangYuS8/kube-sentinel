@@ -69,6 +69,34 @@ func TestWebhookDedupe(t *testing.T) {
 	}
 }
 
+func TestWebhookDedupeUsesRequestWindow(t *testing.T) {
+	now := time.Now()
+	scheme := runtime.NewScheme()
+	_ = ksv1alpha1.AddToScheme(scheme)
+	existing := &ksv1alpha1.HealingRequest{
+		ObjectMeta: metav1.ObjectMeta{Name: "hr-app", Namespace: "default"},
+		Spec: ksv1alpha1.HealingRequestSpec{
+			Workload:                 ksv1alpha1.WorkloadRef{Kind: "Deployment", Namespace: "default", Name: "app"},
+			IdempotencyWindowMinutes: 1,
+		},
+	}
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existing).Build()
+	r := &Receiver{Client: client, Dedupe: NewMemoryDedupeStore(), Now: func() time.Time { return now }}
+	payload := AlertmanagerPayload{Alerts: []Alert{{Fingerprint: "fp-custom", Labels: map[string]string{"workload_kind": "Deployment", "namespace": "default", "name": "app"}}}}
+	body, _ := json.Marshal(payload)
+	w1 := httptest.NewRecorder()
+	r.HandleWebhook(w1, httptest.NewRequest(http.MethodPost, "/alertmanager/webhook", bytes.NewReader(body)))
+	if w1.Code != http.StatusAccepted {
+		t.Fatalf("expected first request accepted")
+	}
+	r.Now = func() time.Time { return now.Add(2 * time.Minute) }
+	w2 := httptest.NewRecorder()
+	r.HandleWebhook(w2, httptest.NewRequest(http.MethodPost, "/alertmanager/webhook", bytes.NewReader(body)))
+	if w2.Code != http.StatusAccepted {
+		t.Fatalf("expected second request accepted after window")
+	}
+}
+
 func TestWebhookRejectsNonDeploymentReadOnly(t *testing.T) {
 	r := buildReceiver(t)
 	payload := AlertmanagerPayload{Alerts: []Alert{{Fingerprint: "fp-non", Labels: map[string]string{"workload_kind": "StatefulSet", "namespace": "default", "name": "db"}}}}

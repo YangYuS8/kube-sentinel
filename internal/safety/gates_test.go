@@ -21,8 +21,22 @@ func TestEvaluateRateLimit(t *testing.T) {
 }
 
 func TestEvaluateBlastRadiusBoundary(t *testing.T) {
-	d := Evaluate(GateInput{Now: time.Now(), MaxActions: 3, AffectedPods: 11, ClusterPods: 100})
+	d := Evaluate(GateInput{Now: time.Now(), MaxActions: 3, AffectedPods: 11, ClusterPods: 100, MaxPodPercentage: 10})
 	if d.Allow {
 		t.Fatalf("expected blocked by blast radius")
+	}
+}
+
+func TestEvaluateBlastRadiusConfigurable(t *testing.T) {
+	d := Evaluate(GateInput{Now: time.Now(), MaxActions: 3, AffectedPods: 11, ClusterPods: 100, MaxPodPercentage: 15})
+	if !d.Allow {
+		t.Fatalf("expected allow with larger blast radius threshold")
+	}
+}
+
+func TestEvaluateInvalidConfig(t *testing.T) {
+	d := Evaluate(GateInput{Now: time.Now(), MaxActions: 0, MaxPodPercentage: 10})
+	if d.Allow || d.Reason != "invalid rate limit config" {
+		t.Fatalf("expected invalid rate limit config")
 	}
 }

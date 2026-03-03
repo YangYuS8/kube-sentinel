@@ -15,6 +15,9 @@
     "env": true,
     "mkdir": true,
     "exit": true,
-    "mv": true
+    "mv": true,
+    "golangci-lint": true,
+    "gofmt": true,
+    "cp": true
   }
 }

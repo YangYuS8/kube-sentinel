@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -18,15 +19,15 @@ import (
 
 const (
 	labelWorkloadKind = "workload_kind"
-	labelNamespace = "namespace"
-	labelName = "name"
+	labelNamespace    = "namespace"
+	labelName         = "name"
 )
 
 type Receiver struct {
-	Client client.Client
-	Dedupe DedupeStore
+	Client    client.Client
+	Dedupe    DedupeStore
 	AuditSink observability.AuditSink
-	Now func() time.Time
+	Now       func() time.Time
 }
 
 func (r *Receiver) HandleWebhook(w http.ResponseWriter, req *http.Request) {
@@ -60,7 +61,12 @@ func (r *Receiver) HandleWebhook(w http.ResponseWriter, req *http.Request) {
 			r.writeAudit(event, "read-only-reject", "unsupported workload kind")
 			continue
 		}
-		if r.Dedupe.Seen(event.CorrelationKey, r.Now(), 5*time.Minute) {
+		window, err := r.resolveIdempotencyWindow(req.Context(), event)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("failed to resolve idempotency window: %v", err), http.StatusInternalServerError)
+			return
+		}
+		if r.Dedupe.Seen(event.CorrelationKey, r.Now(), window) {
 			r.writeAudit(event, "dedupe-skip", "duplicate event within idempotency window")
 			continue
 		}
@@ -89,12 +95,12 @@ func mapAlert(alert Alert) (Event, error) {
 		reason = "alertmanager webhook"
 	}
 	return Event{
-		Fingerprint: fingerprint,
+		Fingerprint:    fingerprint,
 		CorrelationKey: fingerprint,
-		WorkloadKind: kind,
-		Namespace: ns,
-		Name: name,
-		Reason: reason,
+		WorkloadKind:   kind,
+		Namespace:      ns,
+		Name:           name,
+		Reason:         reason,
 	}, nil
 }
 
@@ -113,7 +119,7 @@ func (r *Receiver) upsertHealingRequest(ctx context.Context, event Event) error 
 
 	create := ksv1alpha1.HealingRequest{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: name,
+			Name:      name,
 			Namespace: event.Namespace,
 			Annotations: map[string]string{
 				"kube-sentinel.io/correlation-key": event.CorrelationKey,
@@ -130,6 +136,27 @@ func (r *Receiver) upsertHealingRequest(ctx context.Context, event Event) error 
 	return r.Client.Create(ctx, &create)
 }
 
+func (r *Receiver) resolveIdempotencyWindow(ctx context.Context, event Event) (time.Duration, error) {
+	if r.Client == nil {
+		return 0, fmt.Errorf("kubernetes client is required")
+	}
+	name := fmt.Sprintf("hr-%s", event.Name)
+	key := types.NamespacedName{Name: name, Namespace: event.Namespace}
+	obj := ksv1alpha1.HealingRequest{}
+	err := r.Client.Get(ctx, key, &obj)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return 0, err
+	}
+	if apierrors.IsNotFound(err) {
+		obj = ksv1alpha1.HealingRequest{Spec: ksv1alpha1.HealingRequestSpec{Workload: ksv1alpha1.WorkloadRef{Kind: event.WorkloadKind, Namespace: event.Namespace, Name: event.Name}}}
+	}
+	obj.ApplyDefaults()
+	if obj.Spec.IdempotencyWindowMinutes < 1 {
+		return 0, fmt.Errorf("idempotencyWindowMinutes must be >= 1")
+	}
+	return time.Duration(obj.Spec.IdempotencyWindowMinutes) * time.Minute, nil
+}
+
 func ensureMap(m map[string]string) map[string]string {
 	if m == nil {
 		return map[string]string{}
@@ -142,12 +169,12 @@ func (r *Receiver) writeAudit(event Event, result, detail string) {
 		return
 	}
 	r.AuditSink.Write(observability.AuditEvent{
-		ID: event.CorrelationKey,
-		Trigger: "alertmanager",
-		Target: event.Namespace + "/" + event.Name,
+		ID:          event.CorrelationKey,
+		Trigger:     "alertmanager",
+		Target:      event.Namespace + "/" + event.Name,
 		BeforeState: "event-received",
-		AfterState: detail,
-		Result: result,
-		CreatedAt: r.Now(),
+		AfterState:  detail,
+		Result:      result,
+		CreatedAt:   r.Now(),
 	})
 }

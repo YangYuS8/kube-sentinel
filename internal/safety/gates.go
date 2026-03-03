@@ -14,6 +14,7 @@ type GateInput struct {
 	MaxActions         int
 	AffectedPods       int
 	ClusterPods        int
+	MaxPodPercentage   int
 }
 
 type GateDecision struct {
@@ -26,12 +27,18 @@ func Evaluate(input GateInput) GateDecision {
 	if inMaintenanceWindow(input.Now, input.MaintenanceWindows) {
 		return GateDecision{Allow: false, ReadOnly: true, Reason: "maintenance window"}
 	}
+	if input.MaxActions < 1 {
+		return GateDecision{Allow: false, ReadOnly: true, Reason: "invalid rate limit config"}
+	}
 	if input.ActionsInWindow >= input.MaxActions {
 		return GateDecision{Allow: false, ReadOnly: true, Reason: "rate limit exceeded"}
 	}
+	if input.MaxPodPercentage < 1 || input.MaxPodPercentage > 100 {
+		return GateDecision{Allow: false, ReadOnly: true, Reason: "invalid blast radius config"}
+	}
 	if input.ClusterPods > 0 {
 		pct := (input.AffectedPods * 100) / input.ClusterPods
-		if pct > 10 {
+		if pct > input.MaxPodPercentage {
 			return GateDecision{Allow: false, ReadOnly: true, Reason: "blast radius exceeded"}
 		}
 	}

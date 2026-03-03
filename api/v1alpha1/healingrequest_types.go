@@ -53,22 +53,22 @@ type HealthyRevisionSpec struct {
 }
 
 type HealingRequestSpec struct {
-	Workload           WorkloadRef          `json:"workload"`
-	MaintenanceWindows []string             `json:"maintenanceWindows,omitempty"`
-	IdempotencyWindowMinutes int            `json:"idempotencyWindowMinutes,omitempty"`
-	RateLimit          RateLimitSpec        `json:"rateLimit"`
-	BlastRadius        BlastRadiusSpec      `json:"blastRadius"`
-	CircuitBreaker     CircuitBreakerSpec   `json:"circuitBreaker"`
-	HealthyRevision    HealthyRevisionSpec  `json:"healthyRevision"`
+	Workload                 WorkloadRef         `json:"workload"`
+	MaintenanceWindows       []string            `json:"maintenanceWindows,omitempty"`
+	IdempotencyWindowMinutes int                 `json:"idempotencyWindowMinutes,omitempty"`
+	RateLimit                RateLimitSpec       `json:"rateLimit"`
+	BlastRadius              BlastRadiusSpec     `json:"blastRadius"`
+	CircuitBreaker           CircuitBreakerSpec  `json:"circuitBreaker"`
+	HealthyRevision          HealthyRevisionSpec `json:"healthyRevision"`
 }
 
 type CircuitBreakerStatus struct {
-	ObjectOpen bool   `json:"objectOpen,omitempty"`
-	DomainOpen bool   `json:"domainOpen,omitempty"`
-	OpenReason string `json:"openReason,omitempty"`
-	CurrentObjectFailures int `json:"currentObjectFailures,omitempty"`
-	CurrentDomainFailures int `json:"currentDomainFailures,omitempty"`
-	RecoveryAt string `json:"recoveryAt,omitempty"`
+	ObjectOpen            bool   `json:"objectOpen,omitempty"`
+	DomainOpen            bool   `json:"domainOpen,omitempty"`
+	OpenReason            string `json:"openReason,omitempty"`
+	CurrentObjectFailures int    `json:"currentObjectFailures,omitempty"`
+	CurrentDomainFailures int    `json:"currentDomainFailures,omitempty"`
+	RecoveryAt            string `json:"recoveryAt,omitempty"`
 }
 
 type HealingRequestStatus struct {
@@ -174,8 +174,14 @@ func (r *HealingRequest) Validate() error {
 	if r.Spec.CircuitBreaker.ObjectFailureThreshold < 1 || r.Spec.CircuitBreaker.DomainFailureThreshold < 1 {
 		return fmt.Errorf("circuitBreaker thresholds must be >= 1")
 	}
+	if r.Spec.CircuitBreaker.CooldownMinutes < 1 {
+		return fmt.Errorf("circuitBreaker.cooldownMinutes must be >= 1")
+	}
 	if r.Spec.CircuitBreaker.Scope != BreakerScopeNamespace && r.Spec.CircuitBreaker.Scope != BreakerScopeGlobal {
 		return fmt.Errorf("circuitBreaker.scope must be Namespace or Global")
+	}
+	if r.Spec.HealthyRevision.ObserveMinutes < 1 {
+		return fmt.Errorf("healthyRevision.observeMinutes must be >= 1")
 	}
 	return nil
 }

@@ -44,4 +44,14 @@ func TestValidateBoundaries(t *testing.T) {
 	if err := r.Validate(); err == nil {
 		t.Fatalf("expected idempotency window validation error")
 	}
+	r.Spec.IdempotencyWindowMinutes = 5
+	r.Spec.CircuitBreaker.CooldownMinutes = 0
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected cooldown validation error")
+	}
+	r.Spec.CircuitBreaker.CooldownMinutes = 10
+	r.Spec.HealthyRevision.ObserveMinutes = 0
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected healthy revision observe window validation error")
+	}
 }

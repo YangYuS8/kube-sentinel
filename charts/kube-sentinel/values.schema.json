@@ -15,6 +15,13 @@
       "type": "object",
       "properties": {
         "workloadKind": { "type": "string", "enum": ["Deployment"] },
+        "maintenanceWindows": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^\\d{2}:\\d{2}-\\d{2}:\\d{2}$"
+          }
+        },
         "idempotencyWindowMinutes": { "type": "integer", "minimum": 1 },
         "rateLimit": {
           "type": "object",
@@ -27,7 +34,11 @@
         "blastRadius": {
           "type": "object",
           "properties": {
-            "maxPodPercentage": { "type": "integer", "minimum": 1, "maximum": 100 }
+            "maxPodPercentage": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
           },
           "required": ["maxPodPercentage"]
         },
@@ -39,7 +50,12 @@
             "cooldownMinutes": { "type": "integer", "minimum": 1 },
             "scope": { "type": "string", "enum": ["Namespace", "Global"] }
           },
-          "required": ["objectFailureThreshold", "domainFailureThreshold", "cooldownMinutes", "scope"]
+          "required": [
+            "objectFailureThreshold",
+            "domainFailureThreshold",
+            "cooldownMinutes",
+            "scope"
+          ]
         },
         "healthyRevision": {
           "type": "object",
@@ -50,7 +66,15 @@
           "required": ["observeMinutes", "requireNoCriticalAlerts"]
         }
       },
-      "required": ["workloadKind", "idempotencyWindowMinutes", "rateLimit", "blastRadius", "circuitBreaker", "healthyRevision"]
+      "required": [
+        "workloadKind",
+        "maintenanceWindows",
+        "idempotencyWindowMinutes",
+        "rateLimit",
+        "blastRadius",
+        "circuitBreaker",
+        "healthyRevision"
+      ]
     }
   },
   "required": ["webhook", "healingRequest"]

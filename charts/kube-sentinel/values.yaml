@@ -4,11 +4,12 @@ image:
 
 webhook:
   enabled: true
-  bindAddress: ":8090"
+  bindAddress: ':8090'
   path: /alertmanager/webhook
 
 healingRequest:
   workloadKind: Deployment
+  maintenanceWindows: []
   idempotencyWindowMinutes: 5
   rateLimit:
     maxActions: 3

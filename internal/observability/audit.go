@@ -14,6 +14,9 @@ type AuditEvent struct {
 
 type RuntimeEvent struct {
 	CorrelationKey string
+	Namespace      string
+	Name           string
+	ResourceKind   string
 	Reason         string
 	Message        string
 	Type           string
