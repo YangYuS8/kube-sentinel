@@ -1,0 +1,37 @@
+## ADDED Requirements
+
+### 需求:Phase 2 阶段化能力声明
+
+系统必须支持 StatefulSet 从“默认只读”进入“条件可写”阶段，并保持默认策略不变。
+
+#### 场景: 进入条件可写阶段
+
+- **当** Phase 2 配置显式启用并满足授权门禁
+- **那么** 系统必须将 StatefulSet 能力声明为 `conditional-writable`
+
+## MODIFIED Requirements
+
+### 需求:StatefulSet 保守只读接入
+
+系统必须支持将 StatefulSet 事件纳入保守评估链路；在 Phase 2 中仅当受控授权条件全部满足时才允许受限自动写操作，否则必须维持只读阻断。
+
+#### 场景: Phase 2 授权通过
+
+- **当** StatefulSet 已满足受控动作授权条件
+- **那么** 系统必须允许进入受限自动动作判定流程
+
+#### 场景: Phase 2 授权失败
+
+- **当** StatefulSet 未满足受控动作授权条件
+- **那么** 系统必须继续保持只读阻断语义
+
+### 需求:StatefulSet 影子执行说明
+
+系统在阻断 StatefulSet 自动动作时必须输出影子执行说明；在 Phase 2 中需额外标明是“授权失败”还是“阶段关闭”导致阻断。
+
+#### 场景: 授权失败阻断说明
+
+- **当** StatefulSet 因授权门禁未通过被阻断
+- **那么** 输出的影子执行说明必须包含可检索授权失败原因码
+
+## REMOVED Requirements
