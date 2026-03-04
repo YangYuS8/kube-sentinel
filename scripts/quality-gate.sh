@@ -120,7 +120,10 @@ emit_release_readiness_fields() {
   local strategy_mode="${QUALITY_GATE_RELEASE_READINESS_STRATEGY_MODE:-auto}"
   local circuit_tier="${QUALITY_GATE_RELEASE_READINESS_CIRCUIT_TIER:-none}"
   local operator_override="$(normalize_bool "${QUALITY_GATE_RELEASE_READINESS_OPERATOR_OVERRIDE:-false}")"
-  local rollback_candidate="${QUALITY_GATE_RELEASE_READINESS_ROLLBACK_CANDIDATE:-latest-healthy-revision}"
+  local rollback_candidate="latest-healthy-revision"
+  if [[ "${QUALITY_GATE_RELEASE_READINESS_ROLLBACK_CANDIDATE+x}" == "x" ]]; then
+    rollback_candidate="${QUALITY_GATE_RELEASE_READINESS_ROLLBACK_CANDIDATE}"
+  fi
   local open_incidents="${QUALITY_GATE_RELEASE_READINESS_OPEN_INCIDENTS:-0}"
   local recent_drill_score="${QUALITY_GATE_RELEASE_READINESS_RECENT_DRILL_SCORE:-1.0}"
   local drill_success_rate="${QUALITY_GATE_DRILL_SUCCESS_RATE:-1.0}"
@@ -305,7 +308,10 @@ assert_release_gate_contract_binding() {
 }
 
 assert_release_readiness_contract() {
-  local rollback_candidate="${QUALITY_GATE_RELEASE_READINESS_ROLLBACK_CANDIDATE:-latest-healthy-revision}"
+  local rollback_candidate="latest-healthy-revision"
+  if [[ "${QUALITY_GATE_RELEASE_READINESS_ROLLBACK_CANDIDATE+x}" == "x" ]]; then
+    rollback_candidate="${QUALITY_GATE_RELEASE_READINESS_ROLLBACK_CANDIDATE}"
+  fi
   local open_incidents="${QUALITY_GATE_RELEASE_READINESS_OPEN_INCIDENTS:-0}"
   local max_open_incidents="${QUALITY_GATE_RELEASE_MAX_OPEN_INCIDENTS:-3}"
   local readiness_decision="$(normalize_outcome "${QUALITY_GATE_RELEASE_READINESS_DECISION:-${QUALITY_GATE_RELEASE_DECISION:-allow}}")"
