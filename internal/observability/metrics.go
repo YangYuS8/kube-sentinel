@@ -21,6 +21,12 @@ type Metrics struct {
 	StatefulSetL2Successes     uint64
 	StatefulSetL2Fallbacks     uint64
 	StatefulSetL2Degrades      uint64
+	SnapshotCreateSuccesses    uint64
+	SnapshotCreateFailures     uint64
+	SnapshotRestoreSuccesses   uint64
+	SnapshotRestoreFailures    uint64
+	SnapshotCapacityBlocks     uint64
+	SnapshotPruned             uint64
 }
 
 var (
@@ -70,6 +76,31 @@ var (
 		Name: "kube_sentinel_statefulset_l2_results_total",
 		Help: "Total number of StatefulSet L2 rollback results by result type.",
 	}, []string{"result"})
+	snapshotCreateCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kube_sentinel_snapshot_creates_total",
+		Help: "Total number of snapshot create attempts by result.",
+	}, []string{"result"})
+	snapshotRestoreCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kube_sentinel_snapshot_restores_total",
+		Help: "Total number of snapshot restore attempts by result.",
+	}, []string{"result"})
+	snapshotCapacityBlocksCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "kube_sentinel_snapshot_capacity_blocks_total",
+		Help: "Total number of blocked actions due to snapshot capacity limits.",
+	})
+	snapshotPrunedCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "kube_sentinel_snapshot_pruned_total",
+		Help: "Total number of pruned snapshots.",
+	})
+	snapshotActiveGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "kube_sentinel_snapshot_active",
+		Help: "Current number of active snapshots for the recently processed workload.",
+	})
+	snapshotRestoreDurationHistogram = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:    "kube_sentinel_snapshot_restore_duration_seconds",
+		Help:    "Duration of snapshot restore execution.",
+		Buckets: prometheus.DefBuckets,
+	})
 	strategyDurationHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "kube_sentinel_strategy_duration_seconds",
 		Help:    "Duration of healing strategy execution.",
@@ -91,6 +122,12 @@ func registerPrometheusMetrics() {
 			statefulSetControlledActionCounter,
 			statefulSetFreezeTriggersCounter,
 			statefulSetL2ResultCounter,
+			snapshotCreateCounter,
+			snapshotRestoreCounter,
+			snapshotCapacityBlocksCounter,
+			snapshotPrunedCounter,
+			snapshotActiveGauge,
+			snapshotRestoreDurationHistogram,
 			strategyDurationHistogram,
 		)
 	})
@@ -182,6 +219,58 @@ func (m *Metrics) IncStatefulSetL2Result(result string) {
 		atomic.AddUint64(&m.StatefulSetL2Degrades, 1)
 	}
 	statefulSetL2ResultCounter.WithLabelValues(result).Inc()
+}
+
+func (m *Metrics) IncSnapshotCreateSuccess() {
+	registerPrometheusMetrics()
+	atomic.AddUint64(&m.SnapshotCreateSuccesses, 1)
+	snapshotCreateCounter.WithLabelValues("success").Inc()
+}
+
+func (m *Metrics) IncSnapshotCreateFailure() {
+	registerPrometheusMetrics()
+	atomic.AddUint64(&m.SnapshotCreateFailures, 1)
+	snapshotCreateCounter.WithLabelValues("failure").Inc()
+}
+
+func (m *Metrics) IncSnapshotRestoreSuccess() {
+	registerPrometheusMetrics()
+	atomic.AddUint64(&m.SnapshotRestoreSuccesses, 1)
+	snapshotRestoreCounter.WithLabelValues("success").Inc()
+}
+
+func (m *Metrics) IncSnapshotRestoreFailure() {
+	registerPrometheusMetrics()
+	atomic.AddUint64(&m.SnapshotRestoreFailures, 1)
+	snapshotRestoreCounter.WithLabelValues("failure").Inc()
+}
+
+func (m *Metrics) IncSnapshotCapacityBlock() {
+	registerPrometheusMetrics()
+	atomic.AddUint64(&m.SnapshotCapacityBlocks, 1)
+	snapshotCapacityBlocksCounter.Inc()
+}
+
+func (m *Metrics) AddSnapshotPruned(count int) {
+	if count <= 0 {
+		return
+	}
+	registerPrometheusMetrics()
+	atomic.AddUint64(&m.SnapshotPruned, uint64(count))
+	snapshotPrunedCounter.Add(float64(count))
+}
+
+func (m *Metrics) SetSnapshotActive(count int) {
+	registerPrometheusMetrics()
+	if count < 0 {
+		count = 0
+	}
+	snapshotActiveGauge.Set(float64(count))
+}
+
+func (m *Metrics) ObserveSnapshotRestoreDuration(duration time.Duration) {
+	registerPrometheusMetrics()
+	snapshotRestoreDurationHistogram.Observe(duration.Seconds())
 }
 
 func (m *Metrics) ObserveStrategyDuration(stage string, duration time.Duration) {

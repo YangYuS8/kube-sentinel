@@ -30,6 +30,18 @@ func TestApplyDefaults(t *testing.T) {
 	if r.Spec.EmergencyTry.MaxAttempts != 1 {
 		t.Fatalf("emergency try defaults not applied")
 	}
+	if !r.Spec.SnapshotPolicy.Enabled {
+		t.Fatalf("snapshot policy default enabled not applied")
+	}
+	if r.Spec.SnapshotPolicy.RetentionMinutes != 60 {
+		t.Fatalf("snapshot retention default not applied")
+	}
+	if r.Spec.SnapshotPolicy.RestoreTimeoutSeconds != 30 {
+		t.Fatalf("snapshot restore timeout default not applied")
+	}
+	if r.Spec.SnapshotPolicy.MaxSnapshotsPerWorkload != 20 {
+		t.Fatalf("snapshot max snapshots default not applied")
+	}
 }
 
 func TestValidateAllowsStatefulSet(t *testing.T) {
@@ -121,5 +133,24 @@ func TestValidateStatefulSetPolicyBoundaries(t *testing.T) {
 	r.Spec.StatefulSetPolicy.L2MaxDegradeRatePercent = 101
 	if err := r.Validate(); err == nil {
 		t.Fatalf("expected l2 max degrade rate validation error")
+	}
+}
+
+func TestValidateSnapshotPolicyBoundaries(t *testing.T) {
+	r := baseRequest()
+	r.ApplyDefaults()
+	r.Spec.SnapshotPolicy.RetentionMinutes = 0
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected snapshot retention validation error")
+	}
+	r.Spec.SnapshotPolicy.RetentionMinutes = 60
+	r.Spec.SnapshotPolicy.RestoreTimeoutSeconds = 0
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected snapshot restore timeout validation error")
+	}
+	r.Spec.SnapshotPolicy.RestoreTimeoutSeconds = 30
+	r.Spec.SnapshotPolicy.MaxSnapshotsPerWorkload = 0
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected snapshot max count validation error")
 	}
 }

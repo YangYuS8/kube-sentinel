@@ -85,9 +85,17 @@ type StatefulSetPolicySpec struct {
 	L2MaxDegradeRatePercent  int      `json:"l2MaxDegradeRatePercent,omitempty"`
 }
 
+type SnapshotPolicySpec struct {
+	Enabled                 bool `json:"enabled,omitempty"`
+	RetentionMinutes        int  `json:"retentionMinutes,omitempty"`
+	RestoreTimeoutSeconds   int  `json:"restoreTimeoutSeconds,omitempty"`
+	MaxSnapshotsPerWorkload int  `json:"maxSnapshotsPerWorkload,omitempty"`
+}
+
 type HealingRequestSpec struct {
 	Workload                 WorkloadRef           `json:"workload"`
 	StatefulSetPolicy        StatefulSetPolicySpec `json:"statefulSetPolicy,omitempty"`
+	SnapshotPolicy           SnapshotPolicySpec    `json:"snapshotPolicy,omitempty"`
 	MaintenanceWindows       []string              `json:"maintenanceWindows,omitempty"`
 	IdempotencyWindowMinutes int                   `json:"idempotencyWindowMinutes,omitempty"`
 	RateLimit                RateLimitSpec         `json:"rateLimit"`
@@ -118,6 +126,10 @@ type HealingRequestStatus struct {
 	StatefulSetL2Candidate   string               `json:"statefulSetL2Candidate,omitempty"`
 	StatefulSetL2Decision    string               `json:"statefulSetL2Decision,omitempty"`
 	StatefulSetL2Result      string               `json:"statefulSetL2Result,omitempty"`
+	LastSnapshotID           string               `json:"lastSnapshotId,omitempty"`
+	SnapshotRestoreResult    string               `json:"snapshotRestoreResult,omitempty"`
+	SnapshotFailureReason    string               `json:"snapshotFailureReason,omitempty"`
+	SnapshotActiveCount      int                  `json:"snapshotActiveCount,omitempty"`
 	NextRecommendation       string               `json:"nextRecommendation,omitempty"`
 	BlockReasonCode          string               `json:"blockReasonCode,omitempty"`
 	LastAction               string               `json:"lastAction,omitempty"`
@@ -236,6 +248,18 @@ func (r *HealingRequest) ApplyDefaults() {
 	if r.Spec.StatefulSetPolicy.L2MaxDegradeRatePercent == 0 {
 		r.Spec.StatefulSetPolicy.L2MaxDegradeRatePercent = 10
 	}
+	if !r.Spec.SnapshotPolicy.Enabled {
+		r.Spec.SnapshotPolicy.Enabled = true
+	}
+	if r.Spec.SnapshotPolicy.RetentionMinutes == 0 {
+		r.Spec.SnapshotPolicy.RetentionMinutes = 60
+	}
+	if r.Spec.SnapshotPolicy.RestoreTimeoutSeconds == 0 {
+		r.Spec.SnapshotPolicy.RestoreTimeoutSeconds = 30
+	}
+	if r.Spec.SnapshotPolicy.MaxSnapshotsPerWorkload == 0 {
+		r.Spec.SnapshotPolicy.MaxSnapshotsPerWorkload = 20
+	}
 	if r.Spec.Workload.Kind == "StatefulSet" {
 		if len(r.Spec.StatefulSetPolicy.AllowedNamespaces) == 0 {
 			r.Spec.StatefulSetPolicy.AllowedNamespaces = []string{r.Spec.Workload.Namespace}
@@ -300,6 +324,15 @@ func (r *HealingRequest) Validate() error {
 	}
 	if r.Spec.StatefulSetPolicy.L2MaxDegradeRatePercent < 1 || r.Spec.StatefulSetPolicy.L2MaxDegradeRatePercent > 100 {
 		return fmt.Errorf("statefulSetPolicy.l2MaxDegradeRatePercent must be between 1 and 100")
+	}
+	if r.Spec.SnapshotPolicy.RetentionMinutes < 1 {
+		return fmt.Errorf("snapshotPolicy.retentionMinutes must be >= 1")
+	}
+	if r.Spec.SnapshotPolicy.RestoreTimeoutSeconds < 1 {
+		return fmt.Errorf("snapshotPolicy.restoreTimeoutSeconds must be >= 1")
+	}
+	if r.Spec.SnapshotPolicy.MaxSnapshotsPerWorkload < 1 {
+		return fmt.Errorf("snapshotPolicy.maxSnapshotsPerWorkload must be >= 1")
 	}
 	if r.Spec.Workload.Kind == "StatefulSet" {
 		if len(r.Spec.StatefulSetPolicy.AllowedNamespaces) == 0 {

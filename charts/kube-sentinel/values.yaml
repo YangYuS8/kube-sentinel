@@ -9,6 +9,11 @@ webhook:
 
 healingRequest:
   workloadKind: Deployment
+  snapshotPolicy:
+    enabled: true
+    retentionMinutes: 60
+    restoreTimeoutSeconds: 30
+    maxSnapshotsPerWorkload: 20
   statefulSetPolicy:
     enabled: true
     readOnlyOnly: true

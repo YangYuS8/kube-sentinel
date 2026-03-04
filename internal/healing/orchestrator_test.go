@@ -90,6 +90,35 @@ func (f fakeRuntimeInputProvider) Build(_ context.Context, _ *ksv1alpha1.Healing
 	return f.input, nil
 }
 
+type fakeSnapshotter struct {
+	createErr  error
+	restoreErr error
+	list       []Snapshot
+}
+
+func (f *fakeSnapshotter) Create(_ context.Context, namespace, name string, _ SnapshotOptions) (Snapshot, error) {
+	if f.createErr != nil {
+		return Snapshot{}, f.createErr
+	}
+	s := Snapshot{ID: "snapshot-1", ResourceName: "snapshot-1", Namespace: namespace, Name: name, Revision: "current"}
+	if len(f.list) == 0 {
+		f.list = []Snapshot{s}
+	}
+	return s, nil
+}
+
+func (f *fakeSnapshotter) List(_ context.Context, _, _ string) ([]Snapshot, error) {
+	return f.list, nil
+}
+
+func (f *fakeSnapshotter) Restore(_ context.Context, _ Snapshot) error {
+	return f.restoreErr
+}
+
+func (f *fakeSnapshotter) Prune(_ context.Context, _, _ string, _, _ int) (int, error) {
+	return 0, nil
+}
+
 func TestOrchestratorIdempotent(t *testing.T) {
 	req := newReq()
 	req.Status.Phase = ksv1alpha1.PhaseCompleted
@@ -597,6 +626,61 @@ func TestOrchestratorStatefulSetL2IdempotencyBlocked(t *testing.T) {
 	}
 	if req.Status.BlockReasonCode != "statefulset_l2_idempotency_window" {
 		t.Fatalf("expected l2 idempotency block reason")
+	}
+}
+
+func TestOrchestratorSnapshotCreateFailureBlocks(t *testing.T) {
+	req := newReq()
+	o := &Orchestrator{
+		Adapter:     fakeAdapter{supports: true},
+		Snapshotter: &fakeSnapshotter{createErr: errors.New("snapshot backend unavailable")},
+	}
+	if err := o.Process(context.Background(), req); err == nil {
+		t.Fatalf("expected snapshot creation failure")
+	}
+	if req.Status.Phase != ksv1alpha1.PhaseBlocked {
+		t.Fatalf("expected blocked phase, got %s", req.Status.Phase)
+	}
+	if req.Status.LastEventReason != "snapshot-failed" {
+		t.Fatalf("expected snapshot-failed reason")
+	}
+	if req.Status.SnapshotFailureReason == "" {
+		t.Fatalf("expected snapshot failure reason")
+	}
+}
+
+func TestOrchestratorStatefulSetL2RollbackRestoreFailureEvidence(t *testing.T) {
+	req := newReq()
+	req.Spec.Workload.Kind = "StatefulSet"
+	req.Spec.StatefulSetPolicy.Enabled = true
+	req.Spec.StatefulSetPolicy.ReadOnlyOnly = false
+	req.Spec.StatefulSetPolicy.ControlledActionsEnabled = true
+	req.Spec.StatefulSetPolicy.L2RollbackEnabled = true
+	req.Spec.StatefulSetPolicy.RequireEvidence = false
+	req.Spec.StatefulSetPolicy.AllowedNamespaces = []string{"default"}
+	req.Spec.StatefulSetPolicy.ApprovalAnnotation = "kube-sentinel.io/statefulset-approved"
+	req.Annotations = map[string]string{"kube-sentinel.io/statefulset-approved": "true"}
+	snapshotter := &fakeSnapshotter{restoreErr: errors.New("restore failed")}
+	o := &Orchestrator{
+		Adapter: fakeAdapter{
+			supports:             true,
+			statefulSetActionErr: errors.New("l1 failed"),
+			revisions:            []RevisionRecord{{Revision: "rev-2", UnixTime: 2, Healthy: true}},
+			rollbackErr:          errors.New("l2 rollback failed"),
+		},
+		Snapshotter: snapshotter,
+	}
+	if err := o.Process(context.Background(), req); err == nil {
+		t.Fatalf("expected l2 rollback failure")
+	}
+	if req.Status.StatefulSetFreezeState != "frozen" {
+		t.Fatalf("expected frozen state")
+	}
+	if req.Status.SnapshotRestoreResult != "failed" {
+		t.Fatalf("expected snapshot restore failed result")
+	}
+	if req.Status.StatefulSetFailureReason == "" {
+		t.Fatalf("expected combined rollback/restore failure reason")
 	}
 }
 

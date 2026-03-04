@@ -9,6 +9,7 @@ type AuditEvent struct {
 	WorkloadKind string
 	ActionType   string
 	Phase        string
+	SnapshotID   string
 	Decision     string
 	FreezeState  string
 	BeforeState  string
@@ -19,6 +20,7 @@ type AuditEvent struct {
 
 type RuntimeEvent struct {
 	CorrelationKey string
+	SnapshotID     string
 	Namespace      string
 	Name           string
 	ResourceKind   string

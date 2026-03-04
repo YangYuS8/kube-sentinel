@@ -77,7 +77,14 @@ echo "ASSERTION OK: StatefulSet Phase 2 能力声明生效"
 echo "[3.2/4] 验证 StatefulSet Phase 3 L2 字段存在"
 db_l2_result=$(kubectl -n default get healingrequest hr-db -o jsonpath='{.status.statefulSetL2Result}' 2>/dev/null || true)
 db_l2_decision=$(kubectl -n default get healingrequest hr-db -o jsonpath='{.status.statefulSetL2Decision}' 2>/dev/null || true)
+db_snapshot_id=$(kubectl -n default get healingrequest hr-db -o jsonpath='{.status.lastSnapshotId}' 2>/dev/null || true)
+db_snapshot_restore=$(kubectl -n default get healingrequest hr-db -o jsonpath='{.status.snapshotRestoreResult}' 2>/dev/null || true)
 echo "INFO: hr-db l2Result=${db_l2_result:-<empty>}, l2Decision=${db_l2_decision:-<empty>}"
+echo "INFO: hr-db snapshotId=${db_snapshot_id:-<empty>}, snapshotRestoreResult=${db_snapshot_restore:-<empty>}"
+if [[ -z "${db_snapshot_id}" ]]; then
+  echo "ASSERTION FAILED: 应暴露 lastSnapshotId"
+  exit 1
+fi
 echo "ASSERTION OK: Phase 3 字段已暴露（实际路径依赖运行态触发）"
 
 phase=$(kubectl -n default get healingrequest hr-demo-app -o jsonpath='{.status.phase}')

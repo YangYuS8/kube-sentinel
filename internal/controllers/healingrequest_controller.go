@@ -28,7 +28,7 @@ func (r *HealingRequestReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if r.Orchestrator == nil {
 		r.Orchestrator = &healing.Orchestrator{
 			Adapter:          healing.NewDeploymentAdapter(r.Client),
-			Snapshotter:      &healing.MemorySnapshotter{},
+			Snapshotter:      healing.NewKubernetesSnapshotter(r.Client),
 			Metrics:          &observability.Metrics{},
 			AuditSink:        &observability.MemoryAuditSink{},
 			EventSink:        &observability.MemoryEventSink{},

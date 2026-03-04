@@ -286,15 +286,19 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 			o.writeAudit(req, "blocked", err.Error())
 			return errors.New(req.Status.LastError)
 		}
-		snap, err := o.Snapshotter.Create(req.Spec.Workload.Namespace, req.Spec.Workload.Name)
+		snap, err := o.createSnapshot(ctx, req, "statefulset-l1")
 		if err != nil {
 			if o.Metrics != nil {
 				o.Metrics.IncFailures()
+				o.Metrics.IncSnapshotCreateFailure()
 			}
 			req.Status.Phase = ksv1alpha1.PhaseBlocked
 			req.Status.LastError = err.Error()
 			req.Status.BlockReasonCode = "snapshot_failed"
 			req.Status.LastEventReason = "snapshot-failed"
+			req.Status.SnapshotFailureReason = err.Error()
+			o.emitRuntimeEvent(req, "Warning", "SnapshotCreateFailed", err.Error())
+			o.writeAudit(req, "blocked", "statefulset snapshot creation failed")
 			return err
 		}
 		o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name+"/l1", o.Now(), req.Spec.IdempotencyWindowMinutes)
@@ -329,15 +333,18 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		return nil
 	}
 
-	snap, err := o.Snapshotter.Create(req.Spec.Workload.Namespace, req.Spec.Workload.Name)
+	snap, err := o.createSnapshot(ctx, req, "deployment-l1")
 	if err != nil {
 		logger.Error(err, "snapshot creation failed")
 		if o.Metrics != nil {
 			o.Metrics.IncFailures()
+			o.Metrics.IncSnapshotCreateFailure()
 		}
 		req.Status.Phase = ksv1alpha1.PhaseBlocked
 		req.Status.LastError = err.Error()
+		req.Status.SnapshotFailureReason = err.Error()
 		req.Status.LastEventReason = "snapshot-failed"
+		o.emitRuntimeEvent(req, "Warning", "SnapshotCreateFailed", err.Error())
 		return err
 	}
 
@@ -399,7 +406,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		if o.Metrics != nil {
 			o.Metrics.IncFailures()
 		}
-		_ = o.Snapshotter.Restore(snap)
+		_ = o.restoreSnapshot(ctx, req, snap)
 		req.Status.Phase = ksv1alpha1.PhaseBlocked
 		req.Status.LastError = err.Error()
 		req.Status.LastEventReason = "rollback-failed"
@@ -527,6 +534,7 @@ func (o *Orchestrator) writeAudit(req *ksv1alpha1.HealingRequest, result, afterS
 		Phase:        string(req.Status.Phase),
 		Decision:     req.Status.LastGateDecision,
 		FreezeState:  req.Status.StatefulSetFreezeState,
+		SnapshotID:   req.Status.LastSnapshotID,
 		BeforeState:  req.Status.LastEventReason,
 		AfterState:   afterState,
 		Result:       result,
@@ -545,6 +553,7 @@ func (o *Orchestrator) emitRuntimeEvent(req *ksv1alpha1.HealingRequest, eventTyp
 		ResourceKind:   req.Spec.Workload.Kind,
 		Reason:         reason,
 		Message:        message,
+		SnapshotID:     req.Status.LastSnapshotID,
 		Type:           eventType,
 		CreatedAt:      o.Now(),
 	})
@@ -771,7 +780,7 @@ func (o *Orchestrator) processStatefulSetL2(ctx context.Context, req *ksv1alpha1
 	}
 	o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name+"/l2", o.Now(), req.Spec.IdempotencyWindowMinutes)
 	if err := o.Adapter.RollbackToRevision(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name, latest.Revision); err != nil {
-		_ = o.Snapshotter.Restore(snapshot)
+		restoreErr := o.restoreSnapshot(ctx, req, snapshot)
 		freezeUntil := o.Now().Add(time.Duration(req.Spec.StatefulSetPolicy.FreezeWindowMinutes) * time.Minute)
 		req.Status.Phase = ksv1alpha1.PhaseBlocked
 		req.Status.StatefulSetL2Result = "fallback"
@@ -783,6 +792,9 @@ func (o *Orchestrator) processStatefulSetL2(ctx context.Context, req *ksv1alpha1
 		req.Status.StatefulSetFreezeState = "frozen"
 		req.Status.StatefulSetFreezeUntil = freezeUntil.Format(time.RFC3339)
 		req.Status.StatefulSetFailureReason = err.Error()
+		if restoreErr != nil {
+			req.Status.StatefulSetFailureReason = fmt.Sprintf("rollback failed: %v; restore failed: %v", err, restoreErr)
+		}
 		req.Status.NextRecommendation = "manual intervention required before unlocking freeze"
 		if o.Metrics != nil {
 			o.Metrics.IncFailures()
@@ -816,5 +828,75 @@ func (o *Orchestrator) processStatefulSetL2(ctx context.Context, req *ksv1alpha1
 	o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now(), req.Spec.RateLimit.WindowMinutes)
 	o.emitRuntimeEvent(req, "Normal", "StatefulSetL2RollbackSucceeded", "statefulset l2 rollback executed")
 	o.writeAudit(req, "success", "statefulset l2 rollback executed")
+	return nil
+}
+
+func (o *Orchestrator) createSnapshot(ctx context.Context, req *ksv1alpha1.HealingRequest, phase string) (Snapshot, error) {
+	if o.Snapshotter == nil {
+		return Snapshot{}, fmt.Errorf("snapshotter is required")
+	}
+	if pruned, err := o.Snapshotter.Prune(
+		ctx,
+		req.Spec.Workload.Namespace,
+		req.Spec.Workload.Name,
+		req.Spec.SnapshotPolicy.RetentionMinutes,
+		req.Spec.SnapshotPolicy.MaxSnapshotsPerWorkload,
+	); err == nil {
+		if o.Metrics != nil && pruned > 0 {
+			o.Metrics.AddSnapshotPruned(pruned)
+		}
+	}
+	windowSeconds := int64(maxInt(req.Spec.IdempotencyWindowMinutes, 1) * 60)
+	bucket := o.Now().Unix() / windowSeconds
+	snapshot, err := o.Snapshotter.Create(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name, SnapshotOptions{
+		WorkloadKind:      req.Spec.Workload.Kind,
+		Phase:             phase,
+		IdempotencyKey:    fmt.Sprintf("%s/%s/%s/%d", req.Spec.Workload.Namespace, req.Spec.Workload.Name, phase, bucket),
+		RetentionMinutes:  req.Spec.SnapshotPolicy.RetentionMinutes,
+		MaxSnapshotsCount: req.Spec.SnapshotPolicy.MaxSnapshotsPerWorkload,
+	})
+	if err != nil {
+		if o.Metrics != nil {
+			o.Metrics.IncSnapshotCapacityBlock()
+		}
+		return Snapshot{}, err
+	}
+	req.Status.LastSnapshotID = snapshot.ID
+	req.Status.SnapshotRestoreResult = "pending"
+	req.Status.SnapshotFailureReason = ""
+	if snapshots, listErr := o.Snapshotter.List(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name); listErr == nil {
+		req.Status.SnapshotActiveCount = len(snapshots)
+		if o.Metrics != nil {
+			o.Metrics.SetSnapshotActive(len(snapshots))
+		}
+	}
+	if o.Metrics != nil {
+		o.Metrics.IncSnapshotCreateSuccess()
+	}
+	return snapshot, nil
+}
+
+func (o *Orchestrator) restoreSnapshot(ctx context.Context, req *ksv1alpha1.HealingRequest, snapshot Snapshot) error {
+	if o.Snapshotter == nil {
+		return fmt.Errorf("snapshotter is required")
+	}
+	startedAt := o.Now()
+	err := o.Snapshotter.Restore(ctx, snapshot)
+	if o.Metrics != nil {
+		o.Metrics.ObserveSnapshotRestoreDuration(o.Now().Sub(startedAt))
+	}
+	if err != nil {
+		req.Status.SnapshotRestoreResult = "failed"
+		req.Status.SnapshotFailureReason = err.Error()
+		if o.Metrics != nil {
+			o.Metrics.IncSnapshotRestoreFailure()
+		}
+		return err
+	}
+	req.Status.SnapshotRestoreResult = "success"
+	req.Status.SnapshotFailureReason = ""
+	if o.Metrics != nil {
+		o.Metrics.IncSnapshotRestoreSuccess()
+	}
 	return nil
 }

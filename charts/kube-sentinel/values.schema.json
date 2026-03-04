@@ -18,6 +18,21 @@
           "type": "string",
           "enum": ["Deployment", "StatefulSet"]
         },
+        "snapshotPolicy": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "retentionMinutes": { "type": "integer", "minimum": 1 },
+            "restoreTimeoutSeconds": { "type": "integer", "minimum": 1 },
+            "maxSnapshotsPerWorkload": { "type": "integer", "minimum": 1 }
+          },
+          "required": [
+            "enabled",
+            "retentionMinutes",
+            "restoreTimeoutSeconds",
+            "maxSnapshotsPerWorkload"
+          ]
+        },
         "statefulSetPolicy": {
           "type": "object",
           "properties": {
@@ -143,6 +158,7 @@
       },
       "required": [
         "workloadKind",
+        "snapshotPolicy",
         "statefulSetPolicy",
         "maintenanceWindows",
         "soakTimePolicies",

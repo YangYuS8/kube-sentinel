@@ -109,6 +109,17 @@ spec:
                 - maxActions
                 - windowMinutes
                 type: object
+              snapshotPolicy:
+                properties:
+                  enabled:
+                    type: boolean
+                  maxSnapshotsPerWorkload:
+                    type: integer
+                  restoreTimeoutSeconds:
+                    type: integer
+                  retentionMinutes:
+                    type: integer
+                type: object
               soakTimePolicies:
                 items:
                   properties:
@@ -267,6 +278,8 @@ spec:
                 type: string
               lastHealthyRevision:
                 type: string
+              lastSnapshotId:
+                type: string
               namespaceBlockRate:
                 type: integer
               nextRecommendation:
@@ -279,6 +292,12 @@ spec:
               phase:
                 type: string
               shadowAction:
+                type: string
+              snapshotActiveCount:
+                type: integer
+              snapshotFailureReason:
+                type: string
+              snapshotRestoreResult:
                 type: string
               stableSampleCount:
                 type: integer

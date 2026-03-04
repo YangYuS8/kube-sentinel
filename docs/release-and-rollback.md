@@ -14,6 +14,8 @@
 10. 灰度期间必须观测以下阈值：误动作率 < 1%、回退率 < 5%、冻结触发率 < 5%。任一越线立即回退只读。
 11. 启用 StatefulSet Phase 3（L2）时，必须同时开启 `statefulSetPolicy.l2RollbackEnabled=true`，并校验 L2 候选窗口与降级阈值参数。
 12. Phase 3 灰度期间重点观测：L2 成功率、L2 失败回退率、L2 降级率；任一连续窗口越线应关闭 L2。
+13. 启用持久快照时，必须配置 `snapshotPolicy.retentionMinutes`、`snapshotPolicy.restoreTimeoutSeconds`、`snapshotPolicy.maxSnapshotsPerWorkload` 并先在白名单命名空间灰度。
+14. 快照灰度期间重点观测：`kube_sentinel_snapshot_creates_total{result="failure"}`、`kube_sentinel_snapshot_restores_total{result="failure"}`、`kube_sentinel_snapshot_restore_duration_seconds`。
 
 ## 风险
 
@@ -26,6 +28,8 @@
 - StatefulSet 动作失败后未冻结导致重复扰动（需验证 `statefulSetFreezeState=frozen` 与 `statefulSetFreezeUntil`）。
 - StatefulSet L2 候选筛选不稳定导致频繁降级 L3（需结合候选窗口参数调优）。
 - StatefulSet L2 回滚失败恢复路径异常（需验证 snapshot restore 与冻结联动）。
+- 快照容量上限配置过低导致频繁阻断（需结合告警与容量指标调参）。
+- 快照恢复耗时过长导致恢复窗口扩大（需按 workload 等级设置恢复超时）。
 
 ## 回滚步骤
 
@@ -38,6 +42,7 @@
 7. 将 `statefulSetPolicy.controlledActionsEnabled=false` 且 `statefulSetPolicy.readOnlyOnly=true`，回退到只读策略。
 8. 清理审批注解 `kube-sentinel.io/statefulset-approved`，避免误触发下一轮自动动作。
 9. 将 `statefulSetPolicy.l2RollbackEnabled=false`，回退到 Phase 2（仅 L1 受控 + L3 人工）模式。
+10. 将 `snapshotPolicy.enabled=false`（或回退控制器版本）并清理历史快照对象，恢复到保守只读模式。
 
 ## 应急步骤
 
@@ -47,3 +52,4 @@
 - 运行态输入不可用时默认只读阻断，优先恢复输入采集链路后再恢复自动写操作。
 - 当命名空间只读阻断持续超过预算阈值窗口，触发人工审批后再启用紧急尝试权。
 - StatefulSet 触发自动动作预期时，必须走人工介入流程，不得绕过只读策略。
+- 快照创建失败或恢复失败告警触发后，应优先冻结自动写路径并执行人工回退。
