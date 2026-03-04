@@ -2,6 +2,12 @@ package scripts
 
 import "fmt"
 
+type IncidentAction struct {
+	Level             string
+	RecoveryCondition string
+	Runbook           string
+}
+
 func NormalizeGateOutcome(outcome string) string {
 	switch outcome {
 	case "allow", "block", "degrade":
@@ -37,6 +43,39 @@ func ValidatePrecommitCIConsistency(precommitOutcome, ciOutcome string) error {
 		return fmt.Errorf("gate outcome mismatch: precommit=%s ci=%s", pre, ci)
 	}
 	return nil
+}
+
+func ValidateGateSLOConsistency(gateOutcome, sloOutcome string) error {
+	gate := NormalizeGateOutcome(gateOutcome)
+	slo := NormalizeGateOutcome(sloOutcome)
+	if gate != slo {
+		return fmt.Errorf("gate/slo semantic mismatch: gate=%s slo=%s", gate, slo)
+	}
+	return nil
+}
+
+func MapIncidentAction(outcome string) IncidentAction {
+	normalized := NormalizeGateOutcome(outcome)
+	switch normalized {
+	case "allow":
+		return IncidentAction{
+			Level:             "info",
+			RecoveryCondition: "maintain_target_and_observe",
+			Runbook:           "runbook://runtime-observation",
+		}
+	case "degrade":
+		return IncidentAction{
+			Level:             "warning",
+			RecoveryCondition: "recover_budget_below_degrade_threshold",
+			Runbook:           "runbook://runtime-degrade-recovery",
+		}
+	default:
+		return IncidentAction{
+			Level:             "critical",
+			RecoveryCondition: "manual_approval_after_incident_review",
+			Runbook:           "runbook://runtime-block-rollback",
+		}
+	}
 }
 
 func ValidateOutcomeCoverage(outcomes []string) error {

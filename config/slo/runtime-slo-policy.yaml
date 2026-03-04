@@ -1,0 +1,5 @@
+targetSuccessRatePercent: 99
+sampleWindowMinutes: 10
+errorBudgetPercent: 5
+degradeThresholdPercent: 60
+blockThresholdPercent: 90

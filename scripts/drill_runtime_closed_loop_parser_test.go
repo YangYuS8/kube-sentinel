@@ -66,3 +66,27 @@ func TestValidatePrecommitCIConsistency(t *testing.T) {
 		t.Fatalf("expected mismatched outcomes to fail")
 	}
 }
+
+func TestValidateGateSLOConsistency(t *testing.T) {
+	if err := ValidateGateSLOConsistency("allow", "allow"); err != nil {
+		t.Fatalf("expected allow/allow to pass: %v", err)
+	}
+	if err := ValidateGateSLOConsistency("UNKNOWN", "degrade"); err != nil {
+		t.Fatalf("expected normalized unknown/degrade to pass: %v", err)
+	}
+	if err := ValidateGateSLOConsistency("allow", "block"); err == nil {
+		t.Fatalf("expected mismatch to fail")
+	}
+}
+
+func TestMapIncidentAction(t *testing.T) {
+	allow := MapIncidentAction("allow")
+	degrade := MapIncidentAction("degrade")
+	block := MapIncidentAction("block")
+	if allow.Level != "info" || degrade.Level != "warning" || block.Level != "critical" {
+		t.Fatalf("unexpected incident levels: allow=%+v degrade=%+v block=%+v", allow, degrade, block)
+	}
+	if block.Runbook == "" || block.RecoveryCondition == "" {
+		t.Fatalf("expected block action to include runbook and recovery condition")
+	}
+}

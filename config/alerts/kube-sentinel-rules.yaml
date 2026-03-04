@@ -36,3 +36,31 @@ groups:
           severity: critical
         annotations:
           summary: 'Kube-Sentinel snapshot restore failure detected'
+      - alert: KubeSentinelSLOBudgetWarning
+        expr: kube_sentinel_slo_budget_consumed_percent >= 60 and kube_sentinel_slo_budget_consumed_percent < 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Kube-Sentinel SLO budget is in warning zone'
+      - alert: KubeSentinelSLOBudgetExhausted
+        expr: kube_sentinel_slo_budget_consumed_percent >= 90
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Kube-Sentinel SLO budget exhausted'
+      - alert: KubeSentinelQualityGateDegradeStreak
+        expr: increase(kube_sentinel_quality_gate_evaluations_total{outcome="degrade"}[15m]) >= 3
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: 'Kube-Sentinel quality gate keeps degrading in consecutive windows'
+      - alert: KubeSentinelQualityGateBlockProlonged
+        expr: increase(kube_sentinel_quality_gate_evaluations_total{outcome="block"}[15m]) >= 1
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: 'Kube-Sentinel quality gate block is prolonged'

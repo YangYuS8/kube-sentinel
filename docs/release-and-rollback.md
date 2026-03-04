@@ -33,6 +33,13 @@
 - `block`：任一阻断检查失败（如 CRD 漂移），必须先修复再重试。
 - `degrade`：演练判定需保守路径，必须进入 `L3` / 人工介入流程后再评估恢复自动化。
 
+## SLO 阈值与响应分级
+
+- 推荐初始阈值：`degradeThresholdPercent=60`，`blockThresholdPercent=90`，`sampleWindowMinutes=10`。
+- 预算状态分级：`healthy`（<60%）/ `warning`（60%-89%）/ `exhausted`（>=90%）。
+- 响应等级映射：`allow -> info`，`degrade -> warning`，`block -> critical`。
+- 恢复前置条件：`degrade` 需预算回落到降级阈值以下；`block` 需人工审批与事故复盘通过。
+
 ## 风险
 
 - 健康 Revision 误判导致回滚不准确。
@@ -69,3 +76,11 @@
 - 当命名空间只读阻断持续超过预算阈值窗口，触发人工审批后再启用紧急尝试权。
 - StatefulSet 触发自动动作预期时，必须走人工介入流程，不得绕过只读策略。
 - 快照创建失败或恢复失败告警触发后，应优先冻结自动写路径并执行人工回退。
+
+## 最小告警集与抑制策略
+
+- `KubeSentinelSLOBudgetWarning`：SLO 预算进入 warning 区间（for `10m`）。
+- `KubeSentinelSLOBudgetExhausted`：SLO 预算耗尽并触发阻断（for `5m`）。
+- `KubeSentinelQualityGateDegradeStreak`：连续降级超过阈值窗口（for `15m`）。
+- `KubeSentinelQualityGateBlockProlonged`：阻断持续超过恢复窗口（for `15m`）。
+- 抑制策略：同一对象 `warning` 在 `10m` 内去重；`critical` 仅在状态恢复后允许再次通知。

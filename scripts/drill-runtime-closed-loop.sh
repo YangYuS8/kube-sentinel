@@ -37,6 +37,65 @@ assert_precommit_ci_consistency() {
   echo "ASSERTION OK: 预提交与 CI 门禁语义一致 ($precommit_outcome)"
 }
 
+normalize_outcome() {
+  local outcome="${1:-degrade}"
+  case "$outcome" in
+    allow|block|degrade) echo "$outcome" ;;
+    *) echo "degrade" ;;
+  esac
+}
+
+assert_slo_semantics_consistency() {
+  local gate_outcome="$(normalize_outcome "${1:-}")"
+  local slo_outcome="$(normalize_outcome "${SLO_GOVERNANCE_OUTCOME:-$gate_outcome}")"
+  if [[ "$gate_outcome" != "$slo_outcome" ]]; then
+    echo "ASSERTION FAILED: 门禁语义与 SLO 治理语义不一致 (gate=$gate_outcome, slo=$slo_outcome)"
+    exit 1
+  fi
+  echo "ASSERTION OK: 门禁语义与 SLO 治理语义一致 ($gate_outcome)"
+}
+
+emit_incident_evidence() {
+  local outcome="$(normalize_outcome "${1:-}")"
+  local incident_level="${INCIDENT_LEVEL:-}"
+  local recovery_condition="${INCIDENT_RECOVERY_CONDITION:-}"
+  local runbook="${INCIDENT_RUNBOOK:-}"
+  if [[ -z "$incident_level" ]]; then
+    if [[ "$outcome" == "allow" ]]; then
+      incident_level="info"
+    elif [[ "$outcome" == "degrade" ]]; then
+      incident_level="warning"
+    else
+      incident_level="critical"
+    fi
+  fi
+  if [[ -z "$recovery_condition" ]]; then
+    if [[ "$outcome" == "allow" ]]; then
+      recovery_condition="maintain_target_and_observe"
+    elif [[ "$outcome" == "degrade" ]]; then
+      recovery_condition="recover_budget_below_degrade_threshold"
+    else
+      recovery_condition="manual_approval_after_incident_review"
+    fi
+  fi
+  if [[ -z "$runbook" ]]; then
+    if [[ "$outcome" == "allow" ]]; then
+      runbook="runbook://runtime-observation"
+    elif [[ "$outcome" == "degrade" ]]; then
+      runbook="runbook://runtime-degrade-recovery"
+    else
+      runbook="runbook://runtime-block-rollback"
+    fi
+  fi
+  echo "INFO: incident.level=$incident_level"
+  echo "INFO: incident.recoveryCondition=$recovery_condition"
+  echo "INFO: incident.runbook=$runbook"
+  if [[ -z "$incident_level" || -z "$recovery_condition" || -z "$runbook" ]]; then
+    echo "ASSERTION FAILED: 事故响应证据字段不完整"
+    exit 1
+  fi
+}
+
 echo "[1/4] 触发 Deployment 告警事件"
 kubectl -n "$NAMESPACE" port-forward svc/kube-sentinel 8090:8090 >/tmp/kube-sentinel-pf.log 2>&1 &
 PF_PID=$!
@@ -141,6 +200,8 @@ dep_reason=$(kubectl -n default get healingrequest hr-demo-app -o jsonpath='{.st
 dep_outcome=$(classify_outcome "$dep_phase" "$dep_reason" "$dep_l2_result" "$dep_l2_decision")
 echo "INFO: hr-demo-app gateOutcome=$dep_outcome"
 assert_precommit_ci_consistency
+assert_slo_semantics_consistency "$dep_outcome"
+emit_incident_evidence "$dep_outcome"
 
 if [[ "$dep_outcome" == "block" ]]; then
   echo "ASSERTION FAILED: quality gate=block，禁止继续发布推进"
