@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestSLOGovernancePolicyWithDefaults(t *testing.T) {
@@ -79,5 +80,125 @@ func TestEvaluateSLOBudgetAndIncidentMapping(t *testing.T) {
 	}
 	if !blockPlan.ManualApprovalRequired {
 		t.Fatalf("expected block plan to require manual approval")
+	}
+}
+
+func TestValidateRolloutLayers(t *testing.T) {
+	if err := ValidateRolloutLayers(nil); err == nil {
+		t.Fatalf("expected empty rollout layers to fail")
+	}
+
+	layers := []SLORolloutLayer{
+		{Name: "canary", Namespaces: []string{"default"}, StableWindowPassed: true},
+		{Name: "baseline", Namespaces: []string{"prod"}},
+	}
+	if err := ValidateRolloutLayers(layers); err != nil {
+		t.Fatalf("expected valid rollout layers: %v", err)
+	}
+
+	blocked := []SLORolloutLayer{
+		{Name: "canary", Namespaces: []string{"default"}, StableWindowPassed: false},
+		{Name: "baseline", Namespaces: []string{"prod"}},
+	}
+	if err := ValidateRolloutLayers(blocked); err == nil {
+		t.Fatalf("expected blocked rollout progression to fail")
+	}
+
+	rollbackTriggered := []SLORolloutLayer{
+		{Name: "canary", Namespaces: []string{"default"}, StableWindowPassed: true, RollbackConditionActive: true},
+		{Name: "baseline", Namespaces: []string{"prod"}},
+	}
+	if err := ValidateRolloutLayers(rollbackTriggered); err == nil {
+		t.Fatalf("expected rollback-active layer to block next layer")
+	}
+}
+
+func TestShouldImmediateRollback(t *testing.T) {
+	if ShouldImmediateRollback(SLORolloutLayer{RollbackConditionActive: false}) {
+		t.Fatalf("expected no rollback when condition is false")
+	}
+	if !ShouldImmediateRollback(SLORolloutLayer{RollbackConditionActive: true}) {
+		t.Fatalf("expected rollback when condition is true")
+	}
+}
+
+func TestApplyThresholdChangeRequiresApprovalAndSupportsRollback(t *testing.T) {
+	policy := DefaultSLOGovernancePolicy()
+	observedAt := map[string]time.Time{}
+	now := time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)
+
+	_, _, err := ApplyThresholdChange(policy, SLOThresholdChangeRequest{
+		TargetObject:            "default/demo-app",
+		DegradeThresholdPercent: 55,
+		BlockThresholdPercent:   85,
+		Approver:                "",
+		Reason:                  "test",
+	}, observedAt, now)
+	if err == nil {
+		t.Fatalf("expected missing approver to fail")
+	}
+
+	next, snapshot, err := ApplyThresholdChange(policy, SLOThresholdChangeRequest{
+		TargetObject:            "default/demo-app",
+		DegradeThresholdPercent: 55,
+		BlockThresholdPercent:   85,
+		Approver:                "oncall-a",
+		Reason:                  "reduce noisy degrade",
+	}, observedAt, now)
+	if err != nil {
+		t.Fatalf("expected approved threshold change to succeed: %v", err)
+	}
+	if next.DegradeThresholdPercent != 55 || next.BlockThresholdPercent != 85 {
+		t.Fatalf("unexpected applied thresholds: %+v", next)
+	}
+	if snapshot.DegradeThresholdPercent != policy.DegradeThresholdPercent || snapshot.BlockThresholdPercent != policy.BlockThresholdPercent {
+		t.Fatalf("unexpected snapshot: %+v", snapshot)
+	}
+
+	rolledBack, err := RollbackThresholdChange(next, snapshot)
+	if err != nil {
+		t.Fatalf("expected rollback to succeed: %v", err)
+	}
+	if rolledBack.DegradeThresholdPercent != policy.DegradeThresholdPercent || rolledBack.BlockThresholdPercent != policy.BlockThresholdPercent {
+		t.Fatalf("expected rollback to restore previous thresholds: %+v", rolledBack)
+	}
+}
+
+func TestApplyThresholdChangeObservationWindow(t *testing.T) {
+	policy := DefaultSLOGovernancePolicy()
+	observedAt := map[string]time.Time{}
+	now := time.Date(2026, 3, 4, 10, 0, 0, 0, time.UTC)
+
+	_, _, err := ApplyThresholdChange(policy, SLOThresholdChangeRequest{
+		TargetObject:            "default/demo-app",
+		DegradeThresholdPercent: 58,
+		BlockThresholdPercent:   88,
+		Approver:                "oncall-a",
+		Reason:                  "initial tuning",
+	}, observedAt, now)
+	if err != nil {
+		t.Fatalf("expected first approved tuning to pass: %v", err)
+	}
+
+	_, _, err = ApplyThresholdChange(policy, SLOThresholdChangeRequest{
+		TargetObject:            "default/demo-app",
+		DegradeThresholdPercent: 57,
+		BlockThresholdPercent:   87,
+		Approver:                "oncall-b",
+		Reason:                  "repeat tuning",
+	}, observedAt, now.Add(2*time.Minute))
+	if err == nil {
+		t.Fatalf("expected repeated tuning inside observation window to fail")
+	}
+
+	_, _, err = ApplyThresholdChange(policy, SLOThresholdChangeRequest{
+		TargetObject:            "default/demo-app",
+		DegradeThresholdPercent: 57,
+		BlockThresholdPercent:   87,
+		Approver:                "oncall-b",
+		Reason:                  "post window tuning",
+	}, observedAt, now.Add(11*time.Minute))
+	if err != nil {
+		t.Fatalf("expected tuning after observation window to pass: %v", err)
 	}
 }

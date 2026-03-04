@@ -122,3 +122,74 @@ func TestQualityGateBlocksOnSLOSemanticMismatch(t *testing.T) {
 		t.Fatalf("expected slo governance mismatch category: %s", output)
 	}
 }
+
+func TestQualityGateBlocksOnIncidentMappingMismatch(t *testing.T) {
+	env := map[string]string{
+		"QUALITY_GATE_CMD_TEST":       "true",
+		"QUALITY_GATE_CMD_RACE":       "true",
+		"QUALITY_GATE_CMD_VET":        "true",
+		"QUALITY_GATE_CMD_LINT":       "true",
+		"QUALITY_GATE_CMD_CRD_CHECK":  "true",
+		"QUALITY_GATE_CMD_HELM_SYNC":  "true",
+		"QUALITY_GATE_INCIDENT_LEVEL": "critical",
+	}
+	output, err := runQualityGate(t, env)
+	if err == nil {
+		t.Fatalf("expected incident mapping mismatch to fail, output: %s", output)
+	}
+	if !strings.Contains(output, "QUALITY_GATE_CATEGORY=incident_mapping") {
+		t.Fatalf("expected incident mapping category: %s", output)
+	}
+}
+
+func TestQualityGateBlocksWhenRecoveryNotReady(t *testing.T) {
+	env := map[string]string{
+		"QUALITY_GATE_CMD_TEST":           "true",
+		"QUALITY_GATE_CMD_RACE":           "true",
+		"QUALITY_GATE_CMD_VET":            "true",
+		"QUALITY_GATE_CMD_LINT":           "true",
+		"QUALITY_GATE_CMD_CRD_CHECK":      "true",
+		"QUALITY_GATE_CMD_HELM_SYNC":      "true",
+		"QUALITY_GATE_RECOVERY_READY":     "false",
+		"QUALITY_GATE_RECOVERY_CONDITION": "pending_validation",
+	}
+	output, err := runQualityGate(t, env)
+	if err == nil {
+		t.Fatalf("expected recovery-not-ready to fail, output: %s", output)
+	}
+	if !strings.Contains(output, "QUALITY_GATE_CATEGORY=slo_recovery") {
+		t.Fatalf("expected slo recovery category: %s", output)
+	}
+}
+
+func TestQualityGateAlertSuppressionAndDedup(t *testing.T) {
+	tempDir := t.TempDir()
+	statePath := filepath.Join(tempDir, "alert.state")
+	baseEnv := map[string]string{
+		"QUALITY_GATE_CMD_TEST":                         "true",
+		"QUALITY_GATE_CMD_RACE":                         "true",
+		"QUALITY_GATE_CMD_VET":                          "true",
+		"QUALITY_GATE_CMD_LINT":                         "true",
+		"QUALITY_GATE_CMD_CRD_CHECK":                    "true",
+		"QUALITY_GATE_CMD_HELM_SYNC":                    "true",
+		"QUALITY_GATE_ALERT_STATE_FILE":                 statePath,
+		"QUALITY_GATE_ALERT_SUPPRESSION_WINDOW_SECONDS": "600",
+		"QUALITY_GATE_ALERT_KEY":                        "default/demo-app",
+	}
+
+	output1, err := runQualityGate(t, baseEnv)
+	if err != nil {
+		t.Fatalf("first quality gate run should pass: %v, output=%s", err, output1)
+	}
+	if !strings.Contains(output1, "QUALITY_GATE_ALERT_NOTIFY=true") || !strings.Contains(output1, "QUALITY_GATE_ALERT_SUPPRESSED_COUNT=0") {
+		t.Fatalf("unexpected first suppression output: %s", output1)
+	}
+
+	output2, err := runQualityGate(t, baseEnv)
+	if err != nil {
+		t.Fatalf("second quality gate run should pass: %v, output=%s", err, output2)
+	}
+	if !strings.Contains(output2, "QUALITY_GATE_ALERT_NOTIFY=false") || !strings.Contains(output2, "QUALITY_GATE_ALERT_SUPPRESSED_COUNT=1") {
+		t.Fatalf("expected suppression on repeated run: %s", output2)
+	}
+}

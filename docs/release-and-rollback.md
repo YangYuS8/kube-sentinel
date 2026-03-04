@@ -17,6 +17,10 @@
 12. Phase 3 灰度期间重点观测：L2 成功率、L2 失败回退率、L2 降级率；任一连续窗口越线应关闭 L2。
 13. 启用持久快照时，必须配置 `snapshotPolicy.retentionMinutes`、`snapshotPolicy.restoreTimeoutSeconds`、`snapshotPolicy.maxSnapshotsPerWorkload` 并先在白名单命名空间灰度。
 14. 快照灰度期间重点观测：`kube_sentinel_snapshot_creates_total{result="failure"}`、`kube_sentinel_snapshot_restores_total{result="failure"}`、`kube_sentinel_snapshot_restore_duration_seconds`。
+15. SLO 灰度放量必须分层推进：仅当上一层 `stableWindowPassed=true` 且未命中 `rollbackConditionActive` 才允许进入下一层。
+16. 阈值调优必须具备审批人记录（例如 oncall 值班人）；无审批记录视为无效变更。
+17. 同一对象在观察窗口（`sampleWindowMinutes`）内禁止重复调优；需等待窗口结束后再提交。
+18. 阈值调优前必须保留上一个有效阈值快照，越线回退时恢复该快照。
 
 ## 质量门禁失败分类（示例）
 
@@ -84,3 +88,4 @@
 - `KubeSentinelQualityGateDegradeStreak`：连续降级超过阈值窗口（for `15m`）。
 - `KubeSentinelQualityGateBlockProlonged`：阻断持续超过恢复窗口（for `15m`）。
 - 抑制策略：同一对象 `warning` 在 `10m` 内去重；`critical` 仅在状态恢复后允许再次通知。
+- 门禁输出需携带抑制元数据：`QUALITY_GATE_ALERT_NOTIFY`、`QUALITY_GATE_ALERT_SUPPRESSED_COUNT`。

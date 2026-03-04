@@ -42,25 +42,25 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: 'Kube-Sentinel SLO budget is in warning zone'
+          summary: 'Kube-Sentinel SLO budget is in warning zone (degrade path)'
       - alert: KubeSentinelSLOBudgetExhausted
         expr: kube_sentinel_slo_budget_consumed_percent >= 90
         for: 5m
         labels:
           severity: critical
         annotations:
-          summary: 'Kube-Sentinel SLO budget exhausted'
+          summary: 'Kube-Sentinel SLO budget exhausted (block path)'
       - alert: KubeSentinelQualityGateDegradeStreak
         expr: increase(kube_sentinel_quality_gate_evaluations_total{outcome="degrade"}[15m]) >= 3
         for: 15m
         labels:
           severity: warning
         annotations:
-          summary: 'Kube-Sentinel quality gate keeps degrading in consecutive windows'
+          summary: 'Kube-Sentinel quality gate keeps degrading in consecutive windows (warning severity)'
       - alert: KubeSentinelQualityGateBlockProlonged
         expr: increase(kube_sentinel_quality_gate_evaluations_total{outcome="block"}[15m]) >= 1
         for: 15m
         labels:
           severity: critical
         annotations:
-          summary: 'Kube-Sentinel quality gate block is prolonged'
+          summary: 'Kube-Sentinel quality gate block is prolonged (critical severity)'

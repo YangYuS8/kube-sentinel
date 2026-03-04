@@ -22,6 +22,8 @@
 - 回滚失败时必须记录 `status.snapshotRestoreResult`（`success` 或 `failed`）
 - 演练脚本必须覆盖 `allow` / `block` / `degrade` 三类门禁结果
 - 演练脚本必须输出 incident 证据：级别、恢复条件、runbook 标识
+- 演练脚本必须输出灰度闭环证据：`rollout.canaryStable`、`rollout.rollbackHit`、`rollout.tuningApproved`、`rollout.recoveryObserved`
+- 演练脚本必须校验复盘字段：`postmortem.breachReason`、`postmortem.mitigationAction`、`postmortem.thresholdDecision`、`postmortem.observationPlan`
 
 ## 失败路径
 
@@ -33,3 +35,4 @@
 - 快照恢复失败时必须进入冻结并输出人工介入建议
 - 预提交与 CI 门禁语义不一致时必须阻断验收
 - 门禁语义与 SLO 治理语义不一致时必须阻断验收
+- 恢复条件未满足时即使检查项通过也必须阻断放量（`QUALITY_GATE_RECOVERY_READY=false`）

@@ -21,6 +21,8 @@
     "cp": true,
     "test": true,
     "make": true,
-    "gh": true
+    "gh": true,
+    "diff": true,
+    "true": true
   }
 }

@@ -3,6 +3,9 @@ set -euo pipefail
 
 TRACE_FILE="${QUALITY_GATE_TRACE_FILE:-}"
 SLO_POLICY_FILE="${QUALITY_GATE_SLO_POLICY_FILE:-config/slo/runtime-slo-policy.yaml}"
+ALERT_STATE_FILE="${QUALITY_GATE_ALERT_STATE_FILE:-}"
+ALERT_SUPPRESSION_WINDOW_SECONDS="${QUALITY_GATE_SUPPRESSION_WINDOW_SECONDS:-600}"
+ALERT_KEY="${QUALITY_GATE_ALERT_KEY:-global}"
 
 normalize_outcome() {
   local value="${1:-degrade}"
@@ -63,6 +66,67 @@ emit_slo_fields() {
   echo "QUALITY_GATE_RUNBOOK=${runbook}"
 }
 
+assert_incident_level_mapping() {
+  local outcome="$(normalize_outcome "$1")"
+  local incident_level="$2"
+  local expected="$(derive_incident_level "$outcome")"
+  if [[ "$incident_level" != "$expected" ]]; then
+    print_failure "incident_mapping" "incident_level_semantic_mismatch" "align QUALITY_GATE_SLO_ACTION_LEVEL and QUALITY_GATE_INCIDENT_LEVEL" "block"
+    return 1
+  fi
+  return 0
+}
+
+upsert_alert_state() {
+  local key="$1"
+  local level="$2"
+  local timestamp="$3"
+  local suppressed_count="$4"
+  local outcome="$5"
+  local file="$6"
+  local temp_file
+  temp_file="$(mktemp)"
+  if [[ -f "$file" ]]; then
+    grep -v "^${key}|" "$file" >"$temp_file" || true
+  fi
+  echo "${key}|${level}|${timestamp}|${suppressed_count}|${outcome}" >>"$temp_file"
+  mv "$temp_file" "$file"
+}
+
+emit_alert_notification_state() {
+  local outcome="$(normalize_outcome "$1")"
+  local incident_level="$2"
+  local now_ts="$3"
+
+  if [[ -z "$ALERT_STATE_FILE" ]]; then
+    echo "QUALITY_GATE_ALERT_NOTIFY=true"
+    echo "QUALITY_GATE_ALERT_SUPPRESSED_COUNT=0"
+    return 0
+  fi
+
+  touch "$ALERT_STATE_FILE"
+  local existing
+  existing="$(grep -E "^${ALERT_KEY}\|" "$ALERT_STATE_FILE" || true)"
+  local prev_level=""
+  local prev_ts="0"
+  local prev_count="0"
+  local prev_outcome=""
+  if [[ -n "$existing" ]]; then
+    IFS='|' read -r _ prev_level prev_ts prev_count prev_outcome <<<"$existing"
+  fi
+
+  local notify="true"
+  local next_count="0"
+  if [[ "$prev_level" == "$incident_level" ]] && (( now_ts - prev_ts < ALERT_SUPPRESSION_WINDOW_SECONDS )); then
+    notify="false"
+    next_count=$((prev_count + 1))
+  fi
+
+  upsert_alert_state "$ALERT_KEY" "$incident_level" "$now_ts" "$next_count" "$outcome" "$ALERT_STATE_FILE"
+  echo "QUALITY_GATE_ALERT_NOTIFY=${notify}"
+  echo "QUALITY_GATE_ALERT_SUPPRESSED_COUNT=${next_count}"
+}
+
 append_trace() {
   local step="$1"
   if [[ -n "$TRACE_FILE" ]]; then
@@ -107,6 +171,16 @@ assert_slo_consistency() {
   return 0
 }
 
+assert_recovery_ready() {
+  local outcome="$(normalize_outcome "$1")"
+  local recovery_ready="${QUALITY_GATE_RECOVERY_READY:-true}"
+  if [[ "$outcome" == "allow" ]] && [[ "$recovery_ready" != "true" ]]; then
+    print_failure "slo_recovery" "recovery_condition_not_met" "satisfy recovery condition before allow rollout" "block"
+    return 1
+  fi
+  return 0
+}
+
 QUALITY_GATE_CMD_TEST="${QUALITY_GATE_CMD_TEST:-go test ./...}"
 QUALITY_GATE_CMD_RACE="${QUALITY_GATE_CMD_RACE:-go test -race ./internal/controllers ./internal/healing ./internal/safety ./internal/ingestion ./internal/observability}"
 QUALITY_GATE_CMD_VET="${QUALITY_GATE_CMD_VET:-go vet ./...}"
@@ -122,6 +196,11 @@ run_step "crd_consistency" "crd_consistency" "crd_generation_drift" "run: bash .
 run_step "helm_sync" "api_crd_helm_sync" "helm_constraints_mismatch" "run: go test ./charts/kube-sentinel" "$QUALITY_GATE_CMD_HELM_SYNC"
 
 assert_slo_consistency "allow"
+assert_recovery_ready "allow"
+
+incident_level="${QUALITY_GATE_INCIDENT_LEVEL:-$(derive_incident_level "allow")}"
+assert_incident_level_mapping "allow" "$incident_level"
+emit_alert_notification_state "allow" "$incident_level" "$(date +%s)"
 
 echo "QUALITY_GATE_RESULT=allow"
 echo "QUALITY_GATE_CATEGORY=quality_gate"

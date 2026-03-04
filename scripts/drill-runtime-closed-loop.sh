@@ -96,6 +96,38 @@ emit_incident_evidence() {
   fi
 }
 
+assert_rollout_tuning_recovery_path() {
+  local canary_stable="${ROLLOUT_CANARY_STABLE:-true}"
+  local rollback_hit="${ROLLOUT_ROLLBACK_HIT:-true}"
+  local tuning_approved="${TUNING_APPROVED:-true}"
+  local recovery_observed="${RECOVERY_OBSERVED:-true}"
+  echo "INFO: rollout.canaryStable=$canary_stable"
+  echo "INFO: rollout.rollbackHit=$rollback_hit"
+  echo "INFO: rollout.tuningApproved=$tuning_approved"
+  echo "INFO: rollout.recoveryObserved=$recovery_observed"
+  if [[ "$canary_stable" != "true" ]] || [[ "$rollback_hit" != "true" ]] || [[ "$tuning_approved" != "true" ]] || [[ "$recovery_observed" != "true" ]]; then
+    echo "ASSERTION FAILED: 灰度放量 -> 越线回退 -> 阈值调优 -> 恢复观察 路径证据不完整"
+    exit 1
+  fi
+  echo "ASSERTION OK: 灰度放量与调优恢复路径证据齐全"
+}
+
+assert_postmortem_fields() {
+  local breach_reason="${POSTMORTEM_BREACH_REASON:-}"
+  local mitigation_action="${POSTMORTEM_MITIGATION_ACTION:-}"
+  local threshold_decision="${POSTMORTEM_THRESHOLD_DECISION:-}"
+  local observation_plan="${POSTMORTEM_OBSERVATION_PLAN:-}"
+  echo "INFO: postmortem.breachReason=${breach_reason:-<empty>}"
+  echo "INFO: postmortem.mitigationAction=${mitigation_action:-<empty>}"
+  echo "INFO: postmortem.thresholdDecision=${threshold_decision:-<empty>}"
+  echo "INFO: postmortem.observationPlan=${observation_plan:-<empty>}"
+  if [[ -z "$breach_reason" || -z "$mitigation_action" || -z "$threshold_decision" || -z "$observation_plan" ]]; then
+    echo "ASSERTION FAILED: 复盘字段缺失（需要 breachReason/mitigationAction/thresholdDecision/observationPlan）"
+    exit 1
+  fi
+  echo "ASSERTION OK: 复盘字段齐全"
+}
+
 echo "[1/4] 触发 Deployment 告警事件"
 kubectl -n "$NAMESPACE" port-forward svc/kube-sentinel 8090:8090 >/tmp/kube-sentinel-pf.log 2>&1 &
 PF_PID=$!
@@ -228,6 +260,12 @@ if [[ "$db_outcome" != "block" ]]; then
   exit 1
 fi
 echo "ASSERTION OK: allow/block/degrade 解析与运行态断言通过"
+
+echo "[3.5/4] 验证灰度放量、回退、调优与恢复观察路径"
+assert_rollout_tuning_recovery_path
+
+echo "[3.6/4] 验证复盘审计字段"
+assert_postmortem_fields
 
 phase=$(kubectl -n default get healingrequest hr-demo-app -o jsonpath='{.status.phase}')
 echo "INFO: 当前阶段=$phase（若候选为空应为L3）"

@@ -90,3 +90,37 @@ func TestMapIncidentAction(t *testing.T) {
 		t.Fatalf("expected block action to include runbook and recovery condition")
 	}
 }
+
+func TestValidateRolloutStageProgression(t *testing.T) {
+	err := ValidateRolloutStageProgression(RolloutStageEvidence{})
+	if err == nil {
+		t.Fatalf("expected empty rollout evidence to fail")
+	}
+
+	err = ValidateRolloutStageProgression(RolloutStageEvidence{
+		CanaryStable:     true,
+		RollbackHit:      true,
+		TuningApproved:   true,
+		RecoveryObserved: true,
+	})
+	if err != nil {
+		t.Fatalf("expected complete rollout evidence to pass: %v", err)
+	}
+}
+
+func TestValidatePostmortemEvidence(t *testing.T) {
+	err := ValidatePostmortemEvidence(PostmortemEvidence{BreachReason: "budget_exhausted"})
+	if err == nil {
+		t.Fatalf("expected incomplete postmortem evidence to fail")
+	}
+
+	err = ValidatePostmortemEvidence(PostmortemEvidence{
+		BreachReason:      "budget_exhausted",
+		MitigationAction:  "rollback_to_canary",
+		ThresholdDecision: "tighten_block_threshold",
+		ObservationPlan:   "observe_30m_post_recovery",
+	})
+	if err != nil {
+		t.Fatalf("expected complete postmortem evidence to pass: %v", err)
+	}
+}

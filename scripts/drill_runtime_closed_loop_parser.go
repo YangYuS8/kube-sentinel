@@ -8,6 +8,20 @@ type IncidentAction struct {
 	Runbook           string
 }
 
+type RolloutStageEvidence struct {
+	CanaryStable     bool
+	RollbackHit      bool
+	TuningApproved   bool
+	RecoveryObserved bool
+}
+
+type PostmortemEvidence struct {
+	BreachReason      string
+	MitigationAction  string
+	ThresholdDecision string
+	ObservationPlan   string
+}
+
 func NormalizeGateOutcome(outcome string) string {
 	switch outcome {
 	case "allow", "block", "degrade":
@@ -90,6 +104,38 @@ func ValidateOutcomeCoverage(outcomes []string) error {
 		if !seen[expected] {
 			return fmt.Errorf("missing outcome %s", expected)
 		}
+	}
+	return nil
+}
+
+func ValidateRolloutStageProgression(evidence RolloutStageEvidence) error {
+	if !evidence.CanaryStable {
+		return fmt.Errorf("missing canary stable evidence")
+	}
+	if !evidence.RollbackHit {
+		return fmt.Errorf("missing rollback trigger evidence")
+	}
+	if !evidence.TuningApproved {
+		return fmt.Errorf("missing threshold tuning approval evidence")
+	}
+	if !evidence.RecoveryObserved {
+		return fmt.Errorf("missing recovery observation evidence")
+	}
+	return nil
+}
+
+func ValidatePostmortemEvidence(evidence PostmortemEvidence) error {
+	if evidence.BreachReason == "" {
+		return fmt.Errorf("missing postmortem breachReason")
+	}
+	if evidence.MitigationAction == "" {
+		return fmt.Errorf("missing postmortem mitigationAction")
+	}
+	if evidence.ThresholdDecision == "" {
+		return fmt.Errorf("missing postmortem thresholdDecision")
+	}
+	if evidence.ObservationPlan == "" {
+		return fmt.Errorf("missing postmortem observationPlan")
 	}
 	return nil
 }
