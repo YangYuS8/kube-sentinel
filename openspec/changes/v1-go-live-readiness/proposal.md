@@ -13,9 +13,11 @@
 ## 功能 (Capabilities)
 
 ### 新增功能
+
 - `v1-go-live-readiness`: 提供 V1 上线决策闸门、证据包和放量流程的统一规范。
 
 ### 修改功能
+
 - `delivery-quality-gates`: 增加 V1 go-live 闸门判定与 release decision pack 输出要求。
 - `release-readiness-and-oncall-automation`: 增加值班审批、冻结窗口、人工覆盖与上线决策一致性要求。
 - `runtime-closed-loop-validation`: 增加“预生产验证通过才允许生产灰度”的验收语义与失败阻断路径。
