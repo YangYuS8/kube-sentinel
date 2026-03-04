@@ -20,6 +20,7 @@
     "gofmt": true,
     "cp": true,
     "test": true,
-    "make": true
+    "make": true,
+    "gh": true
   }
 }

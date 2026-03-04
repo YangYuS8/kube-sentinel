@@ -60,6 +60,21 @@ spec:
                 - objectFailureThreshold
                 - scope
                 type: object
+              deploymentPolicy:
+                properties:
+                  blockRateMaxPercent:
+                    type: integer
+                  l1SuccessRateMinPercent:
+                    type: integer
+                  l2CandidateWindowMinutes:
+                    type: integer
+                  l2MaxDegradeRatePercent:
+                    type: integer
+                  l2SuccessRateMinPercent:
+                    type: integer
+                  l3DegradeRateMaxPercent:
+                    type: integer
+                type: object
               emergencyTry:
                 properties:
                   enabled:
@@ -98,6 +113,13 @@ spec:
                 - blockingThresholdPercent
                 - fallbackUnhealthyCount
                 - minTotalWorkloads
+                type: object
+              productionGatePolicy:
+                properties:
+                  failureRatioBlockPercent:
+                    type: integer
+                  sampleWindowMinutes:
+                    type: integer
                 type: object
               rateLimit:
                 properties:
@@ -264,8 +286,20 @@ spec:
                 type: array
               correlationKey:
                 type: string
+              deploymentL2Candidate:
+                type: string
+              deploymentL2Decision:
+                type: string
+              deploymentL2Result:
+                type: string
               emergencyAttempts:
                 type: integer
+              gateEvidenceComplete:
+                type: boolean
+              gateOutcome:
+                type: string
+              gateReasonCode:
+                type: string
               lastAction:
                 type: string
               lastError:
