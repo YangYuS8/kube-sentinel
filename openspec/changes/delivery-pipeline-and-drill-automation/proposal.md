@@ -13,9 +13,11 @@
 ## 功能 (Capabilities)
 
 ### 新增功能
+
 - `delivery-pipeline-and-drill-automation`: 定义持续交付流水线中的自动验证、演练调度、证据归档与发布判定闭环。
 
 ### 修改功能
+
 - `delivery-quality-gates`: 增加交付流水线中发布证据文件与失败分类的强约束。
 - `runtime-closed-loop-validation`: 增加预生产 dry-run 自动执行与结果完整性断言。
 - `release-readiness-and-oncall-automation`: 增加门禁输出与值班模板的一致性约束及可追踪审计。
