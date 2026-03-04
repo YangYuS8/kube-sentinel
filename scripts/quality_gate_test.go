@@ -329,3 +329,61 @@ func TestQualityGateBlocksOnHighRiskWithoutReleaseApproval(t *testing.T) {
 		t.Fatalf("expected runtime production gating category: %s", output)
 	}
 }
+
+func TestQualityGateWritesEvidenceArtifactsWhenConfigured(t *testing.T) {
+	tempDir := t.TempDir()
+	evidencePath := filepath.Join(tempDir, "quality-evidence.json")
+	summaryPath := filepath.Join(tempDir, "quality-summary.txt")
+	env := map[string]string{
+		"QUALITY_GATE_CMD_TEST":              "true",
+		"QUALITY_GATE_CMD_RACE":              "true",
+		"QUALITY_GATE_CMD_VET":               "true",
+		"QUALITY_GATE_CMD_LINT":              "true",
+		"QUALITY_GATE_CMD_CRD_CHECK":         "true",
+		"QUALITY_GATE_CMD_API_CONTRACT_SYNC": "true",
+		"QUALITY_GATE_CMD_HELM_SYNC":         "true",
+		"QUALITY_GATE_EVIDENCE_JSON_FILE":    evidencePath,
+		"QUALITY_GATE_SUMMARY_FILE":          summaryPath,
+	}
+
+	output, err := runQualityGate(t, env)
+	if err != nil {
+		t.Fatalf("quality gate should pass: %v output=%s", err, output)
+	}
+	evidenceRaw, readErr := os.ReadFile(evidencePath)
+	if readErr != nil {
+		t.Fatalf("read evidence failed: %v", readErr)
+	}
+	for _, token := range []string{"\"result\": \"allow\"", "\"category\": \"quality_gate\"", "\"reasonCode\": \"all_checks_passed\"", "\"fixHint\": \"n/a\""} {
+		if !strings.Contains(string(evidenceRaw), token) {
+			t.Fatalf("evidence missing %s: %s", token, string(evidenceRaw))
+		}
+	}
+	summaryRaw, summaryErr := os.ReadFile(summaryPath)
+	if summaryErr != nil {
+		t.Fatalf("read summary failed: %v", summaryErr)
+	}
+	for _, token := range []string{"QUALITY_GATE_RESULT=allow", "QUALITY_GATE_CATEGORY=quality_gate", "QUALITY_GATE_REASON=all_checks_passed", "QUALITY_GATE_FIX_HINT=n/a"} {
+		if !strings.Contains(string(summaryRaw), token) {
+			t.Fatalf("summary missing %s: %s", token, string(summaryRaw))
+		}
+	}
+}
+
+func TestQualityGateEvidenceMissingRequiredFieldsBlocksPipeline(t *testing.T) {
+	workDir := t.TempDir()
+	cmd := exec.Command("bash", "./delivery-pipeline.sh")
+	cmd.Dir = "."
+	cmd.Env = append(os.Environ(),
+		"DELIVERY_PIPELINE_WORK_DIR="+workDir,
+		"DELIVERY_PIPELINE_QUALITY_GATE_CMD=printf 'QUALITY_GATE_RESULT=allow\\nQUALITY_GATE_CATEGORY=quality_gate\\nQUALITY_GATE_REASON=ok\\n'",
+		"DELIVERY_PIPELINE_DRY_RUN_CMD=printf 'DRY_RUN_OUTCOME=allow\\nDRY_RUN_REASON=ok\\nDRY_RUN_TRACE_KEY=trace-ok\\n'",
+	)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected pipeline to block when evidence fields are missing, output=%s", string(output))
+	}
+	if !strings.Contains(string(output), "DELIVERY_PIPELINE_REASON=quality_gate_evidence_missing_fields") {
+		t.Fatalf("unexpected pipeline output: %s", string(output))
+	}
+}

@@ -6,6 +6,8 @@ SLO_POLICY_FILE="${QUALITY_GATE_SLO_POLICY_FILE:-config/slo/runtime-slo-policy.y
 ALERT_STATE_FILE="${QUALITY_GATE_ALERT_STATE_FILE:-}"
 ALERT_SUPPRESSION_WINDOW_SECONDS="${QUALITY_GATE_SUPPRESSION_WINDOW_SECONDS:-600}"
 ALERT_KEY="${QUALITY_GATE_ALERT_KEY:-global}"
+QUALITY_GATE_EVIDENCE_JSON_FILE="${QUALITY_GATE_EVIDENCE_JSON_FILE:-}"
+QUALITY_GATE_SUMMARY_FILE="${QUALITY_GATE_SUMMARY_FILE:-}"
 
 normalize_outcome() {
   local value="${1:-degrade}"
@@ -212,6 +214,45 @@ append_trace() {
   fi
 }
 
+persist_quality_gate_evidence() {
+  local result="$1"
+  local category="$2"
+  local reason="$3"
+  local fix_hint="$4"
+  if [[ -z "$QUALITY_GATE_EVIDENCE_JSON_FILE" && -z "$QUALITY_GATE_SUMMARY_FILE" ]]; then
+    return 0
+  fi
+  local release_decision="$(normalize_outcome "${QUALITY_GATE_RELEASE_DECISION:-$result}")"
+  local incident_level="${QUALITY_GATE_INCIDENT_LEVEL:-$(derive_incident_level "$release_decision")}"
+
+  if [[ -n "$QUALITY_GATE_EVIDENCE_JSON_FILE" ]]; then
+    mkdir -p "$(dirname "$QUALITY_GATE_EVIDENCE_JSON_FILE")"
+    cat >"$QUALITY_GATE_EVIDENCE_JSON_FILE" <<EOF
+{
+  "result": "${result}",
+  "category": "${category}",
+  "reasonCode": "${reason}",
+  "fixHint": "${fix_hint}",
+  "releaseDecision": "${release_decision}",
+  "incidentLevel": "${incident_level}",
+  "sloPolicyFile": "${SLO_POLICY_FILE}"
+}
+EOF
+  fi
+
+  if [[ -n "$QUALITY_GATE_SUMMARY_FILE" ]]; then
+    mkdir -p "$(dirname "$QUALITY_GATE_SUMMARY_FILE")"
+    cat >"$QUALITY_GATE_SUMMARY_FILE" <<EOF
+QUALITY_GATE_RESULT=${result}
+QUALITY_GATE_CATEGORY=${category}
+QUALITY_GATE_REASON=${reason}
+QUALITY_GATE_FIX_HINT=${fix_hint}
+QUALITY_GATE_RELEASE_DECISION=${release_decision}
+QUALITY_GATE_INCIDENT_LEVEL=${incident_level}
+EOF
+  fi
+}
+
 print_failure() {
   local category="$1"
   local reason="$2"
@@ -224,6 +265,7 @@ print_failure() {
   emit_slo_fields "$outcome"
   emit_api_contract_fields
   emit_release_readiness_fields
+  persist_quality_gate_evidence "block" "$category" "$reason" "$fix_hint"
 }
 
 run_step() {
@@ -377,6 +419,8 @@ emit_alert_notification_state "allow" "$incident_level" "$(date +%s)"
 echo "QUALITY_GATE_RESULT=allow"
 echo "QUALITY_GATE_CATEGORY=quality_gate"
 echo "QUALITY_GATE_REASON=all_checks_passed"
+echo "QUALITY_GATE_FIX_HINT=n/a"
 emit_slo_fields "allow"
 emit_api_contract_fields
 emit_release_readiness_fields
+persist_quality_gate_evidence "allow" "quality_gate" "all_checks_passed" "n/a"

@@ -142,6 +142,24 @@
             "allowedDecisions"
           ]
         },
+        "deliveryPipeline": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "nightlySchedule": { "type": "string", "minLength": 1 },
+            "drillWindow": {
+              "type": "string",
+              "enum": ["weekdays", "nightly", "custom"]
+            },
+            "evidenceRetentionDays": { "type": "integer", "minimum": 1 }
+          },
+          "required": [
+            "enabled",
+            "nightlySchedule",
+            "drillWindow",
+            "evidenceRetentionDays"
+          ]
+        },
         "apiContractPolicy": {
           "type": "object",
           "properties": {
@@ -265,6 +283,7 @@
         "deploymentPolicy",
         "productionGatePolicy",
         "releaseReadinessPolicy",
+        "deliveryPipeline",
         "apiContractPolicy",
         "maintenanceWindows",
         "soakTimePolicies",

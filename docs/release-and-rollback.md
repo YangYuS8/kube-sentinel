@@ -51,6 +51,21 @@
 - 演练聚合：`QUALITY_GATE_DRILL_SUCCESS_RATE`、`QUALITY_GATE_DRILL_ROLLBACK_P95_MS`、`QUALITY_GATE_DRILL_GATE_BYPASS_COUNT`。
 - 判定一致性：`QUALITY_GATE_RELEASE_READINESS_DECISION` 必须与 `QUALITY_GATE_RELEASE_DECISION` 一致。
 
+## 持续交付三段式流水线（最小）
+
+- 执行顺序固定：`quality gate -> preprod dry-run -> evidence archive`。
+- 任一阶段失败必须立即终止，输出 `DELIVERY_PIPELINE_FAILED_STAGE` 与 `DELIVERY_PIPELINE_REASON`。
+- 机器可读证据：`delivery-evidence.json`，至少包含 `result`、`category`、`reasonCode`、`fixHint`。
+- 人可读摘要：`delivery-summary.txt`，用于值班快速判断与回退触发。
+- 建议统一入口：`make delivery-pipeline`；必要时通过 `DELIVERY_PIPELINE_*` 环境变量注入 dry-run 与归档路径。
+
+## 预生产 dry-run 语义约束（最小）
+
+- `DRY_RUN_OUTCOME` 仅允许：`allow` / `degrade` / `block`。
+- `DRY_RUN_REASON` 与 `DRY_RUN_TRACE_KEY` 必填；缺失视为证据不完整并阻断。
+- `allow`：可继续发布；`degrade`：进入保守路径并保留人工确认；`block`：立即终止并回滚准备。
+- dry-run 输出必须可追踪到归档目录中的原始证据文件。
+
 ## 值班动作模板执行（最小）
 
 - `allow`：`info` 级别，执行 `runbook://runtime-observation`，30 分钟观察窗口。
@@ -61,6 +76,8 @@
 
 - 触发人工覆盖时，必须记录覆盖人、覆盖前后判定、覆盖原因与时间戳。
 - 覆盖记录必须进入审计事件并关联 `correlationKey`，用于后续复盘。
+- 人工覆盖字段最小集合：`actor`、`preDecision`、`postDecision`、`reason`、`timestamp`、`traceKey`。
+- 对同一 `traceKey` 重放应保持幂等（只记录一次，后续标记 `idempotent`）。
 
 ## 验收矩阵（最小）
 
@@ -121,3 +138,10 @@
 - `KubeSentinelQualityGateBlockProlonged`：阻断持续超过恢复窗口（for `15m`）。
 - 抑制策略：同一对象 `warning` 在 `10m` 内去重；`critical` 仅在状态恢复后允许再次通知。
 - 门禁输出需携带抑制元数据：`QUALITY_GATE_ALERT_NOTIFY`、`QUALITY_GATE_ALERT_SUPPRESSED_COUNT`。
+
+## 周期演练与趋势指标（最小）
+
+- 周期演练建议工作日夜间窗口执行（示例：`0 2 * * 1-5`）。
+- 关注四个趋势指标：门禁通过率、阻断率、恢复耗时、演练覆盖率。
+- 空样本窗口应输出 0 值并保留窗口边界，不得输出非法数值。
+- 异常输入（如负恢复耗时）必须失败并阻断统计写入。

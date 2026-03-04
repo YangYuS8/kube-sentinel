@@ -125,3 +125,44 @@ func TestValuesYamlIncludesAPIContractPolicyDefaults(t *testing.T) {
 		}
 	}
 }
+
+func TestValuesSchemaIncludesDeliveryPipeline(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("values.schema.json"))
+	if err != nil {
+		t.Fatalf("read schema failed: %v", err)
+	}
+	var schema map[string]interface{}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("unmarshal schema failed: %v", err)
+	}
+	properties := schema["properties"].(map[string]interface{})
+	healingRequest := properties["healingRequest"].(map[string]interface{})
+	healingProperties := healingRequest["properties"].(map[string]interface{})
+	deliveryPipeline, ok := healingProperties["deliveryPipeline"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("deliveryPipeline missing in healingRequest properties")
+	}
+	required := deliveryPipeline["required"].([]interface{})
+	if len(required) != 4 {
+		t.Fatalf("unexpected deliveryPipeline required fields: %#v", required)
+	}
+}
+
+func TestValuesYamlIncludesDeliveryPipelineDefaults(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("values.yaml"))
+	if err != nil {
+		t.Fatalf("read values yaml failed: %v", err)
+	}
+	content := string(raw)
+	for _, token := range []string{
+		"deliveryPipeline:",
+		"enabled: true",
+		"nightlySchedule: '0 2 * * 1-5'",
+		"drillWindow: weekdays",
+		"evidenceRetentionDays: 14",
+	} {
+		if !strings.Contains(content, token) {
+			t.Fatalf("values.yaml missing %s", token)
+		}
+	}
+}

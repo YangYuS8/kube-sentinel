@@ -23,5 +23,7 @@ jobs:
           gofmt -w $(find . -name '*.go' -not -path './vendor/*')
           goimports -w $(find . -name '*.go' -not -path './vendor/*')
           git diff --exit-code
-      - name: Quality gate
-        run: make quality-gate
+      - name: Delivery pipeline (quality gate -> preprod dry-run -> evidence archive)
+        run: make delivery-pipeline
+        env:
+          DELIVERY_PIPELINE_DRY_RUN_CMD: "printf 'DRY_RUN_OUTCOME=allow\nDRY_RUN_REASON=ci_preprod_simulation\nDRY_RUN_TRACE_KEY=ci-${{ github.run_id }}\n'"

@@ -1,6 +1,6 @@
 GO ?= go
 
-.PHONY: test race vet fmt lint quality-gate
+.PHONY: test race vet fmt lint quality-gate delivery-pipeline delivery-trend-report
 
 test:
 	$(GO) test ./...
@@ -20,3 +20,9 @@ lint:
 
 quality-gate:
 	bash ./scripts/quality-gate.sh
+
+delivery-pipeline:
+	bash ./scripts/delivery-pipeline.sh
+
+delivery-trend-report:
+	$(GO) test ./scripts -run 'TestComputeDeliveryTrendMetrics|TestComputeDeliveryTrendMetricsWindowBoundary|TestComputeDeliveryTrendMetricsEmptyWindow|TestComputeDeliveryTrendMetricsInvalidInput'

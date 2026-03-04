@@ -44,6 +44,11 @@ healingRequest:
       - allow
       - degrade
       - block
+  deliveryPipeline:
+    enabled: true
+    nightlySchedule: '0 2 * * 1-5'
+    drillWindow: weekdays
+    evidenceRetentionDays: 14
   apiContractPolicy:
     compatibilityClass: backward-compatible
     migrationPlanRef: ''
