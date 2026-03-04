@@ -27,6 +27,13 @@ type Metrics struct {
 	SnapshotRestoreFailures    uint64
 	SnapshotCapacityBlocks     uint64
 	SnapshotPruned             uint64
+	DeploymentL1Successes      uint64
+	DeploymentL1Failures       uint64
+	DeploymentL1Blocks         uint64
+	DeploymentL2Successes      uint64
+	DeploymentL2Fallbacks      uint64
+	DeploymentL2Degrades       uint64
+	DeploymentStageBlocks      uint64
 }
 
 var (
@@ -106,6 +113,18 @@ var (
 		Help:    "Duration of healing strategy execution.",
 		Buckets: prometheus.DefBuckets,
 	}, []string{"stage"})
+	deploymentL1ResultCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kube_sentinel_deployment_l1_results_total",
+		Help: "Total number of Deployment L1 action results by result type.",
+	}, []string{"result"})
+	deploymentL2ResultCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kube_sentinel_deployment_l2_results_total",
+		Help: "Total number of Deployment L2 action results by result type.",
+	}, []string{"result"})
+	deploymentStageBlocksCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kube_sentinel_deployment_stage_blocks_total",
+		Help: "Total number of Deployment stage blocks by reason.",
+	}, []string{"reason"})
 )
 
 func registerPrometheusMetrics() {
@@ -129,6 +148,9 @@ func registerPrometheusMetrics() {
 			snapshotActiveGauge,
 			snapshotRestoreDurationHistogram,
 			strategyDurationHistogram,
+			deploymentL1ResultCounter,
+			deploymentL2ResultCounter,
+			deploymentStageBlocksCounter,
 		)
 	})
 }
@@ -276,4 +298,80 @@ func (m *Metrics) ObserveSnapshotRestoreDuration(duration time.Duration) {
 func (m *Metrics) ObserveStrategyDuration(stage string, duration time.Duration) {
 	registerPrometheusMetrics()
 	strategyDurationHistogram.WithLabelValues(stage).Observe(duration.Seconds())
+}
+
+func (m *Metrics) IncDeploymentL1Result(result string) {
+	registerPrometheusMetrics()
+	if result == "" {
+		result = "unknown"
+	}
+	switch result {
+	case "success":
+		atomic.AddUint64(&m.DeploymentL1Successes, 1)
+	case "failed":
+		atomic.AddUint64(&m.DeploymentL1Failures, 1)
+	case "blocked":
+		atomic.AddUint64(&m.DeploymentL1Blocks, 1)
+	}
+	deploymentL1ResultCounter.WithLabelValues(result).Inc()
+}
+
+func (m *Metrics) IncDeploymentL2Result(result string) {
+	registerPrometheusMetrics()
+	if result == "" {
+		result = "unknown"
+	}
+	switch result {
+	case "success":
+		atomic.AddUint64(&m.DeploymentL2Successes, 1)
+	case "fallback":
+		atomic.AddUint64(&m.DeploymentL2Fallbacks, 1)
+	case "degraded":
+		atomic.AddUint64(&m.DeploymentL2Degrades, 1)
+	}
+	deploymentL2ResultCounter.WithLabelValues(result).Inc()
+}
+
+func (m *Metrics) IncDeploymentStageBlock(reason string) {
+	registerPrometheusMetrics()
+	if reason == "" {
+		reason = "unknown"
+	}
+	atomic.AddUint64(&m.DeploymentStageBlocks, 1)
+	deploymentStageBlocksCounter.WithLabelValues(reason).Inc()
+}
+
+func (m *Metrics) DeploymentTieredRates() (l1SuccessRate, l2SuccessRate, l3DegradeRate, blockRate float64) {
+	l1Success := atomic.LoadUint64(&m.DeploymentL1Successes)
+	l1Failed := atomic.LoadUint64(&m.DeploymentL1Failures)
+	l1Blocked := atomic.LoadUint64(&m.DeploymentL1Blocks)
+	l2Success := atomic.LoadUint64(&m.DeploymentL2Successes)
+	l2Fallback := atomic.LoadUint64(&m.DeploymentL2Fallbacks)
+	l2Degraded := atomic.LoadUint64(&m.DeploymentL2Degrades)
+	stageBlocked := atomic.LoadUint64(&m.DeploymentStageBlocks)
+
+	l1Total := l1Success + l1Failed + l1Blocked
+	if l1Total == 0 {
+		l1SuccessRate = 100
+	} else {
+		l1SuccessRate = float64(l1Success) * 100 / float64(l1Total)
+	}
+
+	l2Total := l2Success + l2Fallback + l2Degraded
+	if l2Total == 0 {
+		l2SuccessRate = 100
+		l3DegradeRate = 0
+	} else {
+		l2SuccessRate = float64(l2Success) * 100 / float64(l2Total)
+		l3DegradeRate = float64(l2Degraded) * 100 / float64(l2Total)
+	}
+
+	totalStages := l1Total + l2Total
+	if totalStages == 0 {
+		blockRate = 0
+	} else {
+		blockRate = float64(stageBlocked) * 100 / float64(totalStages)
+	}
+
+	return
 }

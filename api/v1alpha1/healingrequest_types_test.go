@@ -42,6 +42,18 @@ func TestApplyDefaults(t *testing.T) {
 	if r.Spec.SnapshotPolicy.MaxSnapshotsPerWorkload != 20 {
 		t.Fatalf("snapshot max snapshots default not applied")
 	}
+	if r.Spec.DeploymentPolicy.L2CandidateWindowMinutes != 30 {
+		t.Fatalf("deployment l2 candidate window default not applied")
+	}
+	if r.Spec.DeploymentPolicy.L2MaxDegradeRatePercent != 10 {
+		t.Fatalf("deployment l2 max degrade default not applied")
+	}
+	if r.Spec.DeploymentPolicy.L1SuccessRateMinPercent != 60 || r.Spec.DeploymentPolicy.L2SuccessRateMinPercent != 50 {
+		t.Fatalf("deployment success rate defaults not applied")
+	}
+	if r.Spec.DeploymentPolicy.L3DegradeRateMaxPercent != 40 || r.Spec.DeploymentPolicy.BlockRateMaxPercent != 30 {
+		t.Fatalf("deployment gate rate defaults not applied")
+	}
 }
 
 func TestValidateAllowsStatefulSet(t *testing.T) {
@@ -152,5 +164,39 @@ func TestValidateSnapshotPolicyBoundaries(t *testing.T) {
 	r.Spec.SnapshotPolicy.MaxSnapshotsPerWorkload = 0
 	if err := r.Validate(); err == nil {
 		t.Fatalf("expected snapshot max count validation error")
+	}
+}
+
+func TestValidateDeploymentPolicyBoundaries(t *testing.T) {
+	r := baseRequest()
+	r.ApplyDefaults()
+	r.Spec.DeploymentPolicy.L2CandidateWindowMinutes = 0
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected deployment l2 candidate window validation error")
+	}
+	r.Spec.DeploymentPolicy.L2CandidateWindowMinutes = 30
+	r.Spec.DeploymentPolicy.L2MaxDegradeRatePercent = 101
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected deployment l2 max degrade validation error")
+	}
+	r.Spec.DeploymentPolicy.L2MaxDegradeRatePercent = 10
+	r.Spec.DeploymentPolicy.L1SuccessRateMinPercent = 0
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected deployment l1 success rate validation error")
+	}
+	r.Spec.DeploymentPolicy.L1SuccessRateMinPercent = 60
+	r.Spec.DeploymentPolicy.L2SuccessRateMinPercent = 101
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected deployment l2 success rate validation error")
+	}
+	r.Spec.DeploymentPolicy.L2SuccessRateMinPercent = 50
+	r.Spec.DeploymentPolicy.L3DegradeRateMaxPercent = 0
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected deployment l3 degrade rate validation error")
+	}
+	r.Spec.DeploymentPolicy.L3DegradeRateMaxPercent = 40
+	r.Spec.DeploymentPolicy.BlockRateMaxPercent = 101
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected deployment block rate validation error")
 	}
 }

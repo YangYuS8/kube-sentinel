@@ -85,6 +85,15 @@ type StatefulSetPolicySpec struct {
 	L2MaxDegradeRatePercent  int      `json:"l2MaxDegradeRatePercent,omitempty"`
 }
 
+type DeploymentPolicySpec struct {
+	L2CandidateWindowMinutes int `json:"l2CandidateWindowMinutes,omitempty"`
+	L2MaxDegradeRatePercent  int `json:"l2MaxDegradeRatePercent,omitempty"`
+	L1SuccessRateMinPercent  int `json:"l1SuccessRateMinPercent,omitempty"`
+	L2SuccessRateMinPercent  int `json:"l2SuccessRateMinPercent,omitempty"`
+	L3DegradeRateMaxPercent  int `json:"l3DegradeRateMaxPercent,omitempty"`
+	BlockRateMaxPercent      int `json:"blockRateMaxPercent,omitempty"`
+}
+
 type SnapshotPolicySpec struct {
 	Enabled                 bool `json:"enabled,omitempty"`
 	RetentionMinutes        int  `json:"retentionMinutes,omitempty"`
@@ -95,6 +104,7 @@ type SnapshotPolicySpec struct {
 type HealingRequestSpec struct {
 	Workload                 WorkloadRef           `json:"workload"`
 	StatefulSetPolicy        StatefulSetPolicySpec `json:"statefulSetPolicy,omitempty"`
+	DeploymentPolicy         DeploymentPolicySpec  `json:"deploymentPolicy,omitempty"`
 	SnapshotPolicy           SnapshotPolicySpec    `json:"snapshotPolicy,omitempty"`
 	MaintenanceWindows       []string              `json:"maintenanceWindows,omitempty"`
 	IdempotencyWindowMinutes int                   `json:"idempotencyWindowMinutes,omitempty"`
@@ -126,6 +136,9 @@ type HealingRequestStatus struct {
 	StatefulSetL2Candidate   string               `json:"statefulSetL2Candidate,omitempty"`
 	StatefulSetL2Decision    string               `json:"statefulSetL2Decision,omitempty"`
 	StatefulSetL2Result      string               `json:"statefulSetL2Result,omitempty"`
+	DeploymentL2Candidate    string               `json:"deploymentL2Candidate,omitempty"`
+	DeploymentL2Decision     string               `json:"deploymentL2Decision,omitempty"`
+	DeploymentL2Result       string               `json:"deploymentL2Result,omitempty"`
 	LastSnapshotID           string               `json:"lastSnapshotId,omitempty"`
 	SnapshotRestoreResult    string               `json:"snapshotRestoreResult,omitempty"`
 	SnapshotFailureReason    string               `json:"snapshotFailureReason,omitempty"`
@@ -248,6 +261,24 @@ func (r *HealingRequest) ApplyDefaults() {
 	if r.Spec.StatefulSetPolicy.L2MaxDegradeRatePercent == 0 {
 		r.Spec.StatefulSetPolicy.L2MaxDegradeRatePercent = 10
 	}
+	if r.Spec.DeploymentPolicy.L2CandidateWindowMinutes == 0 {
+		r.Spec.DeploymentPolicy.L2CandidateWindowMinutes = 30
+	}
+	if r.Spec.DeploymentPolicy.L2MaxDegradeRatePercent == 0 {
+		r.Spec.DeploymentPolicy.L2MaxDegradeRatePercent = 10
+	}
+	if r.Spec.DeploymentPolicy.L1SuccessRateMinPercent == 0 {
+		r.Spec.DeploymentPolicy.L1SuccessRateMinPercent = 60
+	}
+	if r.Spec.DeploymentPolicy.L2SuccessRateMinPercent == 0 {
+		r.Spec.DeploymentPolicy.L2SuccessRateMinPercent = 50
+	}
+	if r.Spec.DeploymentPolicy.L3DegradeRateMaxPercent == 0 {
+		r.Spec.DeploymentPolicy.L3DegradeRateMaxPercent = 40
+	}
+	if r.Spec.DeploymentPolicy.BlockRateMaxPercent == 0 {
+		r.Spec.DeploymentPolicy.BlockRateMaxPercent = 30
+	}
 	if !r.Spec.SnapshotPolicy.Enabled {
 		r.Spec.SnapshotPolicy.Enabled = true
 	}
@@ -324,6 +355,24 @@ func (r *HealingRequest) Validate() error {
 	}
 	if r.Spec.StatefulSetPolicy.L2MaxDegradeRatePercent < 1 || r.Spec.StatefulSetPolicy.L2MaxDegradeRatePercent > 100 {
 		return fmt.Errorf("statefulSetPolicy.l2MaxDegradeRatePercent must be between 1 and 100")
+	}
+	if r.Spec.DeploymentPolicy.L2CandidateWindowMinutes < 1 {
+		return fmt.Errorf("deploymentPolicy.l2CandidateWindowMinutes must be >= 1")
+	}
+	if r.Spec.DeploymentPolicy.L2MaxDegradeRatePercent < 1 || r.Spec.DeploymentPolicy.L2MaxDegradeRatePercent > 100 {
+		return fmt.Errorf("deploymentPolicy.l2MaxDegradeRatePercent must be between 1 and 100")
+	}
+	if r.Spec.DeploymentPolicy.L1SuccessRateMinPercent < 1 || r.Spec.DeploymentPolicy.L1SuccessRateMinPercent > 100 {
+		return fmt.Errorf("deploymentPolicy.l1SuccessRateMinPercent must be between 1 and 100")
+	}
+	if r.Spec.DeploymentPolicy.L2SuccessRateMinPercent < 1 || r.Spec.DeploymentPolicy.L2SuccessRateMinPercent > 100 {
+		return fmt.Errorf("deploymentPolicy.l2SuccessRateMinPercent must be between 1 and 100")
+	}
+	if r.Spec.DeploymentPolicy.L3DegradeRateMaxPercent < 1 || r.Spec.DeploymentPolicy.L3DegradeRateMaxPercent > 100 {
+		return fmt.Errorf("deploymentPolicy.l3DegradeRateMaxPercent must be between 1 and 100")
+	}
+	if r.Spec.DeploymentPolicy.BlockRateMaxPercent < 1 || r.Spec.DeploymentPolicy.BlockRateMaxPercent > 100 {
+		return fmt.Errorf("deploymentPolicy.blockRateMaxPercent must be between 1 and 100")
 	}
 	if r.Spec.SnapshotPolicy.RetentionMinutes < 1 {
 		return fmt.Errorf("snapshotPolicy.retentionMinutes must be >= 1")

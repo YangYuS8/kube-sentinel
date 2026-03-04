@@ -67,6 +67,45 @@
             "l2MaxDegradeRatePercent"
           ]
         },
+        "deploymentPolicy": {
+          "type": "object",
+          "properties": {
+            "l2CandidateWindowMinutes": { "type": "integer", "minimum": 1 },
+            "l2MaxDegradeRatePercent": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "l1SuccessRateMinPercent": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "l2SuccessRateMinPercent": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "l3DegradeRateMaxPercent": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "blockRateMaxPercent": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          "required": [
+            "l2CandidateWindowMinutes",
+            "l2MaxDegradeRatePercent",
+            "l1SuccessRateMinPercent",
+            "l2SuccessRateMinPercent",
+            "l3DegradeRateMaxPercent",
+            "blockRateMaxPercent"
+          ]
+        },
         "maintenanceWindows": {
           "type": "array",
           "items": {
@@ -160,6 +199,7 @@
         "workloadKind",
         "snapshotPolicy",
         "statefulSetPolicy",
+        "deploymentPolicy",
         "maintenanceWindows",
         "soakTimePolicies",
         "namespaceBudget",

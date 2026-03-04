@@ -333,101 +333,122 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		return nil
 	}
 
+	if blocked, reason := o.deploymentReleaseGateBlocked(req); blocked {
+		req.Status.Phase = ksv1alpha1.PhaseBlocked
+		req.Status.LastError = reason
+		req.Status.BlockReasonCode = "deployment_release_gate"
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastEventReason = "deployment-release-gate-blocked"
+		req.Status.NextRecommendation = "switch to conservative mode and adjust deployment tiered thresholds"
+		if o.Metrics != nil {
+			o.Metrics.IncFailures()
+			o.Metrics.IncDeploymentL1Result("blocked")
+			o.Metrics.IncDeploymentStageBlock("release_gate")
+		}
+		o.emitRuntimeEvent(req, "Warning", "DeploymentReleaseGateBlocked", reason)
+		o.writeAudit(req, "blocked", reason)
+		return errors.New(reason)
+	}
+
+	if o.actionsInWindow(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name+"/l1", o.Now(), req.Spec.IdempotencyWindowMinutes) > 0 {
+		req.Status.Phase = ksv1alpha1.PhaseBlocked
+		req.Status.LastError = "deployment l1 action already executed in current idempotency window"
+		req.Status.BlockReasonCode = "deployment_l1_idempotency_window"
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastEventReason = "deployment-l1-idempotency-blocked"
+		req.Status.NextRecommendation = "wait for idempotency window or manually intervene"
+		if o.Metrics != nil {
+			o.Metrics.IncFailures()
+			o.Metrics.IncReadOnlyBlocks("deployment_l1_idempotency_window", req.Spec.Workload.Kind)
+			o.Metrics.IncDeploymentL1Result("blocked")
+			o.Metrics.IncDeploymentStageBlock("idempotency_window")
+		}
+		o.emitRuntimeEvent(req, "Warning", "DeploymentL1IdempotencyBlocked", req.Status.LastError)
+		o.writeAudit(req, "blocked", req.Status.LastError)
+		return errors.New(req.Status.LastError)
+	}
+
 	snap, err := o.createSnapshot(ctx, req, "deployment-l1")
 	if err != nil {
 		logger.Error(err, "snapshot creation failed")
 		if o.Metrics != nil {
 			o.Metrics.IncFailures()
 			o.Metrics.IncSnapshotCreateFailure()
+			o.Metrics.IncDeploymentL1Result("failed")
 		}
 		req.Status.Phase = ksv1alpha1.PhaseBlocked
 		req.Status.LastError = err.Error()
 		req.Status.SnapshotFailureReason = err.Error()
 		req.Status.LastEventReason = "snapshot-failed"
+		req.Status.DeploymentL2Decision = "l1-snapshot-failed"
 		o.emitRuntimeEvent(req, "Warning", "SnapshotCreateFailed", err.Error())
 		return err
 	}
 
 	req.Status.Phase = ksv1alpha1.PhaseL1
-	revisions, err := o.Adapter.ListRevisions(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name)
-	if err != nil {
-		logger.Error(err, "list revisions failed")
-		if o.Metrics != nil {
-			o.Metrics.IncFailures()
-		}
-		req.Status.LastError = err.Error()
+	req.Status.LastAction = "deployment-l1-rollout-restart"
+	req.Status.LastEventReason = "deployment-l1-started"
+	if err := o.Adapter.ExecuteDeploymentControlledAction(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name, "rollout-restart"); err != nil {
+		req.Status.Phase = ksv1alpha1.PhaseL2
+		req.Status.DeploymentL2Decision = "entered-l2-after-l1-failure"
+		req.Status.DeploymentL2Result = "pending"
+		req.Status.LastError = fmt.Sprintf("deployment l1 action failed: %v", err)
+		req.Status.LastEventReason = "deployment-l1-failed"
+		req.Status.NextRecommendation = "evaluate deployment L2 healthy rollback candidate"
 		if breaker != nil {
 			breaker.RecordFailure(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now())
-			state := breaker.Status(req.Spec.Workload.Namespace + "/" + req.Spec.Workload.Name)
-			req.Status.CircuitBreaker.ObjectOpen = state.OpenReason == "object breaker open"
-			req.Status.CircuitBreaker.DomainOpen = state.OpenReason == "domain breaker open"
-			req.Status.CircuitBreaker.CurrentObjectFailures = state.CurrentObjectFailures
-			req.Status.CircuitBreaker.CurrentDomainFailures = state.CurrentDomainFailures
-			req.Status.CircuitBreaker.RecoveryAt = state.RecoveryAt
-			req.Status.CircuitBreaker.OpenReason = fmt.Sprintf("%s (objectThreshold=%d, domainThreshold=%d)", state.OpenReason, req.Spec.CircuitBreaker.ObjectFailureThreshold, req.Spec.CircuitBreaker.DomainFailureThreshold)
+			if allow, reason := breaker.Allow(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now()); !allow {
+				state := breaker.Status(req.Spec.Workload.Namespace + "/" + req.Spec.Workload.Name)
+				req.Status.Phase = ksv1alpha1.PhaseBlocked
+				req.Status.BlockReasonCode = "circuit_breaker_open"
+				req.Status.LastError = reason
+				req.Status.LastGateDecision = reason
+				req.Status.DeploymentL2Decision = "blocked-by-circuit-breaker"
+				req.Status.DeploymentL2Result = "fallback"
+				req.Status.LastEventReason = "deployment-l2-circuit-breaker-open"
+				req.Status.CircuitBreaker.ObjectOpen = state.OpenReason == "object breaker open"
+				req.Status.CircuitBreaker.DomainOpen = state.OpenReason == "domain breaker open"
+				req.Status.CircuitBreaker.CurrentObjectFailures = state.CurrentObjectFailures
+				req.Status.CircuitBreaker.CurrentDomainFailures = state.CurrentDomainFailures
+				req.Status.CircuitBreaker.RecoveryAt = state.RecoveryAt
+				req.Status.CircuitBreaker.OpenReason = fmt.Sprintf("%s (objectThreshold=%d, domainThreshold=%d)", state.OpenReason, req.Spec.CircuitBreaker.ObjectFailureThreshold, req.Spec.CircuitBreaker.DomainFailureThreshold)
+				if o.Metrics != nil {
+					o.Metrics.IncFailures()
+					o.Metrics.IncCircuitBreaks()
+					o.Metrics.IncDeploymentL1Result("failed")
+					o.Metrics.IncDeploymentL2Result("fallback")
+					o.Metrics.IncDeploymentStageBlock("circuit_breaker")
+				}
+				o.emitRuntimeEvent(req, "Warning", "CircuitBreakerOpen", reason)
+				o.writeAudit(req, "blocked", req.Status.CircuitBreaker.OpenReason)
+				return errors.New(reason)
+			}
 		}
-		req.Status.LastEventReason = "revision-list-failed"
-		o.emitRuntimeEvent(req, "Warning", "RevisionListFailed", err.Error())
-		o.writeAudit(req, "failed", err.Error())
-		return err
-	}
-	latest, err := SelectLatestHealthyRevision(revisions)
-	if err != nil {
-		logger.Info("no healthy revision, fallback to L3", "reason", err.Error())
 		if o.Metrics != nil {
 			o.Metrics.IncFailures()
+			o.Metrics.IncDeploymentL1Result("failed")
 		}
-		req.Status.Phase = ksv1alpha1.PhaseL3
-		req.Status.LastError = "no healthy revision available; inspect deployment revision evidence and alert history"
-		req.Status.LastEvidenceStatus = "insufficient-evidence"
-		req.Status.LastAction = "manual-intervention"
-		req.Status.LastEventReason = "no-healthy-revision"
-		o.emitRuntimeEvent(req, "Warning", "L3Fallback", req.Status.LastError)
-		o.writeAudit(req, "fallback", req.Status.LastError)
-		return nil
+		o.emitRuntimeEvent(req, "Warning", "DeploymentL1Failed", err.Error())
+		return o.processDeploymentL2(ctx, req, snap)
 	}
-	req.Status.LastEvidenceStatus = "healthy-revision-selected"
-	if err := o.Adapter.ValidateRevisionDependencies(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name, latest.Revision); err != nil {
-		if o.Metrics != nil {
-			o.Metrics.IncFailures()
-			o.Metrics.IncReadOnlyBlocks("revision_dependency", req.Spec.Workload.Kind)
-		}
-		req.Status.Phase = ksv1alpha1.PhaseL3
-		req.Status.LastError = "revision dependencies unavailable; manual intervention required"
-		req.Status.LastEvidenceStatus = "insufficient-evidence"
-		req.Status.LastAction = "manual-intervention"
-		req.Status.LastEventReason = "revision-dependency-missing"
-		o.emitRuntimeEvent(req, "Warning", "L3Fallback", req.Status.LastError)
-		o.writeAudit(req, "fallback", req.Status.LastError)
-		return nil
-	}
-	if err := o.Adapter.RollbackToRevision(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name, latest.Revision); err != nil {
-		logger.Error(err, "rollback to healthy revision failed", "revision", latest.Revision)
-		if o.Metrics != nil {
-			o.Metrics.IncFailures()
-		}
-		_ = o.restoreSnapshot(ctx, req, snap)
-		req.Status.Phase = ksv1alpha1.PhaseBlocked
-		req.Status.LastError = err.Error()
-		req.Status.LastEventReason = "rollback-failed"
-		o.emitRuntimeEvent(req, "Warning", "RollbackFailed", err.Error())
-		o.writeAudit(req, "failed", fmt.Sprintf("rollback failed and restored snapshot: %v", err))
-		return err
-	}
-	o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now(), req.Spec.RateLimit.WindowMinutes)
 
+	o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name+"/l1", o.Now(), req.Spec.IdempotencyWindowMinutes)
+	o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now(), req.Spec.RateLimit.WindowMinutes)
 	req.Status.Phase = ksv1alpha1.PhaseCompleted
-	logger.Info("healing process completed", "healthyRevision", latest.Revision)
-	req.Status.LastAction = "rollback-to-healthy"
-	req.Status.LastHealthyRevision = latest.Revision
-	req.Status.LastEventReason = "rollback-succeeded"
+	req.Status.LastAction = "deployment-l1-rollout-restart"
+	req.Status.LastEventReason = "deployment-l1-succeeded"
+	req.Status.LastEvidenceStatus = "deployment-l1-succeeded"
+	req.Status.DeploymentL2Decision = "not-required-l1-succeeded"
+	req.Status.DeploymentL2Result = "skipped"
+	req.Status.LastError = ""
+	req.Status.NextRecommendation = "continue observing post-l1 stability"
 	req.Status.ObservedGeneration = req.Generation
 	if o.Metrics != nil {
-		o.Metrics.IncRollbacks()
 		o.Metrics.IncSuccess()
+		o.Metrics.IncDeploymentL1Result("success")
 	}
-	o.writeAudit(req, "success", "rolled-back")
-	o.emitRuntimeEvent(req, "Normal", "ClosedLoopCompleted", "runtime closed-loop completed")
+	o.writeAudit(req, "success", "deployment l1 action executed")
+	o.emitRuntimeEvent(req, "Normal", "DeploymentL1Succeeded", "deployment l1 rollout restart executed")
 	return nil
 }
 
@@ -669,6 +690,159 @@ func isStatefulSetFrozen(req *ksv1alpha1.HealingRequest, now time.Time) (bool, s
 	req.Status.StatefulSetFreezeState = "none"
 	req.Status.StatefulSetFreezeUntil = ""
 	return false, ""
+}
+
+func selectDeploymentL2Candidate(revisions []RevisionRecord, windowMinutes int, now time.Time) (RevisionRecord, error) {
+	windowStart := now.Add(-time.Duration(windowMinutes) * time.Minute).Unix()
+	for _, candidate := range revisions {
+		if candidate.Healthy && candidate.UnixTime >= windowStart {
+			return candidate, nil
+		}
+	}
+	return RevisionRecord{}, fmt.Errorf("no healthy revision within %d minute candidate window", windowMinutes)
+}
+
+func (o *Orchestrator) deploymentReleaseGateBlocked(req *ksv1alpha1.HealingRequest) (bool, string) {
+	if o.Metrics == nil {
+		return false, ""
+	}
+	l1Rate, l2Rate, l3Rate, blockRate := o.Metrics.DeploymentTieredRates()
+	policy := req.Spec.DeploymentPolicy
+	if l1Rate < float64(policy.L1SuccessRateMinPercent) {
+		return true, fmt.Sprintf("deployment release gate blocked: l1 success rate %.1f%% < %d%%", l1Rate, policy.L1SuccessRateMinPercent)
+	}
+	if l2Rate < float64(policy.L2SuccessRateMinPercent) {
+		return true, fmt.Sprintf("deployment release gate blocked: l2 success rate %.1f%% < %d%%", l2Rate, policy.L2SuccessRateMinPercent)
+	}
+	if l3Rate > float64(policy.L3DegradeRateMaxPercent) {
+		return true, fmt.Sprintf("deployment release gate blocked: l3 degrade rate %.1f%% > %d%%", l3Rate, policy.L3DegradeRateMaxPercent)
+	}
+	if blockRate > float64(policy.BlockRateMaxPercent) {
+		return true, fmt.Sprintf("deployment release gate blocked: stage block rate %.1f%% > %d%%", blockRate, policy.BlockRateMaxPercent)
+	}
+	return false, ""
+}
+
+func (o *Orchestrator) processDeploymentL2(ctx context.Context, req *ksv1alpha1.HealingRequest, snapshot Snapshot) error {
+	if o.actionsInWindow(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name+"/l2", o.Now(), req.Spec.IdempotencyWindowMinutes) > 0 {
+		req.Status.Phase = ksv1alpha1.PhaseBlocked
+		req.Status.DeploymentL2Result = "fallback"
+		req.Status.DeploymentL2Decision = "blocked-by-idempotency-window"
+		req.Status.LastError = "deployment l2 rollback blocked by idempotency window"
+		req.Status.BlockReasonCode = "deployment_l2_idempotency_window"
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastEventReason = "deployment-l2-idempotency-blocked"
+		req.Status.NextRecommendation = "wait for idempotency window or manually intervene"
+		if o.Metrics != nil {
+			o.Metrics.IncFailures()
+			o.Metrics.IncReadOnlyBlocks("deployment_l2_idempotency_window", req.Spec.Workload.Kind)
+			o.Metrics.IncDeploymentL2Result("fallback")
+			o.Metrics.IncDeploymentStageBlock("idempotency_window")
+		}
+		o.emitRuntimeEvent(req, "Warning", "DeploymentL2IdempotencyBlocked", req.Status.LastError)
+		o.writeAudit(req, "blocked", req.Status.LastError)
+		return errors.New(req.Status.LastError)
+	}
+
+	revisions, err := o.Adapter.ListRevisions(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name)
+	if err != nil {
+		req.Status.Phase = ksv1alpha1.PhaseL3
+		req.Status.DeploymentL2Result = "degraded"
+		req.Status.DeploymentL2Decision = "revision-list-failed"
+		req.Status.LastEvidenceStatus = "insufficient-evidence"
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastError = fmt.Sprintf("deployment l2 revision list failed: %v", err)
+		req.Status.LastEventReason = "deployment-l2-revision-list-failed"
+		req.Status.NextRecommendation = "verify deployment revision history"
+		if o.Metrics != nil {
+			o.Metrics.IncFailures()
+			o.Metrics.IncDeploymentL2Result("degraded")
+		}
+		o.emitRuntimeEvent(req, "Warning", "DeploymentL2Degraded", req.Status.LastError)
+		o.writeAudit(req, "fallback", req.Status.LastError)
+		return nil
+	}
+	latest, err := selectDeploymentL2Candidate(revisions, req.Spec.DeploymentPolicy.L2CandidateWindowMinutes, o.Now())
+	if err != nil {
+		req.Status.Phase = ksv1alpha1.PhaseL3
+		req.Status.DeploymentL2Result = "degraded"
+		req.Status.DeploymentL2Decision = "no-healthy-candidate"
+		req.Status.LastEvidenceStatus = "insufficient-evidence"
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastError = "deployment no healthy revision available in candidate window; degraded to manual intervention"
+		req.Status.LastEventReason = "deployment-l2-no-candidate"
+		req.Status.NextRecommendation = "inspect healthy revision evidence and alert history"
+		if o.Metrics != nil {
+			o.Metrics.IncDeploymentL2Result("degraded")
+		}
+		o.emitRuntimeEvent(req, "Warning", "DeploymentL2Degraded", req.Status.LastError)
+		o.writeAudit(req, "fallback", req.Status.LastError)
+		return nil
+	}
+	req.Status.DeploymentL2Candidate = latest.Revision
+	req.Status.LastEvidenceStatus = "deployment-l2-candidate-selected"
+	if err := o.Adapter.ValidateRevisionDependencies(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name, latest.Revision); err != nil {
+		req.Status.Phase = ksv1alpha1.PhaseL3
+		req.Status.DeploymentL2Result = "degraded"
+		req.Status.DeploymentL2Decision = "dependency-validation-failed"
+		req.Status.LastEvidenceStatus = "insufficient-evidence"
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastError = "deployment revision dependencies unavailable; degraded to manual intervention"
+		req.Status.LastEventReason = "deployment-l2-dependency-missing"
+		req.Status.NextRecommendation = "restore missing dependencies and retry"
+		if o.Metrics != nil {
+			o.Metrics.IncFailures()
+			o.Metrics.IncReadOnlyBlocks("deployment_l2_dependency", req.Spec.Workload.Kind)
+			o.Metrics.IncDeploymentL2Result("degraded")
+		}
+		o.emitRuntimeEvent(req, "Warning", "DeploymentL2Degraded", req.Status.LastError)
+		o.writeAudit(req, "fallback", req.Status.LastError)
+		return nil
+	}
+	o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name+"/l2", o.Now(), req.Spec.IdempotencyWindowMinutes)
+	if err := o.Adapter.RollbackToRevision(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name, latest.Revision); err != nil {
+		restoreErr := o.restoreSnapshot(ctx, req, snapshot)
+		req.Status.Phase = ksv1alpha1.PhaseBlocked
+		req.Status.DeploymentL2Result = "fallback"
+		req.Status.DeploymentL2Decision = "rollback-failed"
+		req.Status.LastError = "deployment l2 rollback failed; fallback to read-only"
+		req.Status.BlockReasonCode = "deployment_l2_rollback_failed"
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastEventReason = "deployment-l2-rollback-failed"
+		req.Status.StatefulSetFailureReason = err.Error()
+		if restoreErr != nil {
+			req.Status.StatefulSetFailureReason = fmt.Sprintf("rollback failed: %v; restore failed: %v", err, restoreErr)
+		}
+		req.Status.NextRecommendation = "manual intervention required before retrying automated action"
+		if o.Metrics != nil {
+			o.Metrics.IncFailures()
+			o.Metrics.IncReadOnlyBlocks("deployment_l2_rollback_failed", req.Spec.Workload.Kind)
+			o.Metrics.IncDeploymentL2Result("fallback")
+			o.Metrics.IncDeploymentStageBlock("rollback_failed")
+		}
+		o.emitRuntimeEvent(req, "Warning", "DeploymentL2RollbackFailed", err.Error())
+		o.writeAudit(req, "failed", "deployment l2 rollback failed and restored snapshot")
+		return err
+	}
+
+	req.Status.Phase = ksv1alpha1.PhaseCompleted
+	req.Status.DeploymentL2Result = "success"
+	req.Status.DeploymentL2Decision = "rollback-succeeded"
+	req.Status.LastAction = "deployment-l2-rollback-to-healthy"
+	req.Status.LastHealthyRevision = latest.Revision
+	req.Status.LastEventReason = "deployment-l2-rollback-succeeded"
+	req.Status.LastEvidenceStatus = "deployment-l2-rollback-succeeded"
+	req.Status.NextRecommendation = "continue observing post-rollback stability"
+	req.Status.ObservedGeneration = req.Generation
+	if o.Metrics != nil {
+		o.Metrics.IncRollbacks()
+		o.Metrics.IncSuccess()
+		o.Metrics.IncDeploymentL2Result("success")
+	}
+	o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now(), req.Spec.RateLimit.WindowMinutes)
+	o.emitRuntimeEvent(req, "Normal", "DeploymentL2RollbackSucceeded", "deployment l2 rollback executed")
+	o.writeAudit(req, "success", "deployment l2 rollback executed")
+	return nil
 }
 
 func (o *Orchestrator) processStatefulSetL2(ctx context.Context, req *ksv1alpha1.HealingRequest, runtimeInput RuntimeInput, snapshot Snapshot) error {

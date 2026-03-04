@@ -19,6 +19,7 @@
     "golangci-lint": true,
     "gofmt": true,
     "cp": true,
-    "test": true
+    "test": true,
+    "make": true
   }
 }

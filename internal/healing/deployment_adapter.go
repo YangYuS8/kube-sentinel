@@ -153,6 +153,22 @@ func (d DeploymentAdapter) RollbackToRevision(ctx context.Context, namespace, na
 	return d.Client.Update(ctx, &statefulSet)
 }
 
+func (d DeploymentAdapter) ExecuteDeploymentControlledAction(ctx context.Context, namespace, name, actionType string) error {
+	if d.Client == nil {
+		return fmt.Errorf("kubernetes client is required")
+	}
+	if actionType != "rollout-restart" {
+		return fmt.Errorf("unsupported deployment action type %q", actionType)
+	}
+	deployment := appsv1.Deployment{}
+	if err := d.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, &deployment); err != nil {
+		return err
+	}
+	deployment.Spec.Template.Annotations = ensureStringMap(deployment.Spec.Template.Annotations)
+	deployment.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = time.Now().UTC().Format(time.RFC3339)
+	return d.Client.Update(ctx, &deployment)
+}
+
 func (d DeploymentAdapter) ExecuteStatefulSetControlledAction(ctx context.Context, namespace, name, actionType string) error {
 	if d.Client == nil {
 		return fmt.Errorf("kubernetes client is required")

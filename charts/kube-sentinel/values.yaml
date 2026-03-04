@@ -25,6 +25,13 @@ healingRequest:
     freezeWindowMinutes: 10
     l2CandidateWindowMinutes: 30
     l2MaxDegradeRatePercent: 10
+  deploymentPolicy:
+    l2CandidateWindowMinutes: 30
+    l2MaxDegradeRatePercent: 10
+    l1SuccessRateMinPercent: 60
+    l2SuccessRateMinPercent: 50
+    l3DegradeRateMaxPercent: 40
+    blockRateMaxPercent: 30
   maintenanceWindows: []
   idempotencyWindowMinutes: 5
   soakTimePolicies:

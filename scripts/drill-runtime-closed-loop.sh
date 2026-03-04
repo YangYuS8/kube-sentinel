@@ -87,6 +87,20 @@ if [[ -z "${db_snapshot_id}" ]]; then
 fi
 echo "ASSERTION OK: Phase 3 字段已暴露（实际路径依赖运行态触发）"
 
+echo "[3.3/4] 输出 Deployment 分层阶段证据"
+dep_phase=$(kubectl -n default get healingrequest hr-demo-app -o jsonpath='{.status.phase}' 2>/dev/null || true)
+dep_action=$(kubectl -n default get healingrequest hr-demo-app -o jsonpath='{.status.lastAction}' 2>/dev/null || true)
+dep_l2_result=$(kubectl -n default get healingrequest hr-demo-app -o jsonpath='{.status.deploymentL2Result}' 2>/dev/null || true)
+dep_l2_decision=$(kubectl -n default get healingrequest hr-demo-app -o jsonpath='{.status.deploymentL2Decision}' 2>/dev/null || true)
+dep_candidate=$(kubectl -n default get healingrequest hr-demo-app -o jsonpath='{.status.deploymentL2Candidate}' 2>/dev/null || true)
+echo "INFO: hr-demo-app phase=${dep_phase:-<empty>}, lastAction=${dep_action:-<empty>}"
+echo "INFO: hr-demo-app deploymentL2Result=${dep_l2_result:-<empty>}, deploymentL2Decision=${dep_l2_decision:-<empty>}, deploymentL2Candidate=${dep_candidate:-<empty>}"
+if [[ -z "${dep_phase}" ]]; then
+  echo "ASSERTION FAILED: Deployment 必须输出分层阶段信息"
+  exit 1
+fi
+echo "ASSERTION OK: Deployment 分层阶段证据已输出"
+
 phase=$(kubectl -n default get healingrequest hr-demo-app -o jsonpath='{.status.phase}')
 echo "INFO: 当前阶段=$phase（若候选为空应为L3）"
 
