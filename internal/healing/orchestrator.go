@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -596,6 +597,51 @@ func (o *Orchestrator) writeAudit(req *ksv1alpha1.HealingRequest, result, afterS
 		Recommendation:    recommendation,
 		CreatedAt:         o.Now(),
 	}
+
+	summary, summaryErr := observability.BuildReleaseReadinessSummary(observability.ReleaseReadinessInput{
+		ActionType:        req.Status.LastAction,
+		RiskLevel:         riskLevelFromDecision(req.Status.LastGateDecision),
+		StrategyMode:      strategyModeFromPhase(req.Status.Phase),
+		CircuitTier:       circuitTierFromStatus(req.Status.CircuitBreaker),
+		Decision:          gateOutcome,
+		RollbackCandidate: req.Status.LastHealthyRevision,
+		OpenIncidents: append(
+			observability.BuildIncidentsFromCSV(readAnnotation(req, "kube-sentinel.io/open-incidents"), false, "runtime", o.Now()),
+			observability.BuildIncidentsFromCSV(readAnnotation(req, "kube-sentinel.io/open-drill-incidents"), true, "drill", o.Now())...,
+		),
+		OperatorOverride: operatorOverrideFromAnnotations(req),
+		Drill: observability.ParseDrillAggregate(
+			readAnnotation(req, "kube-sentinel.io/drill-success-rate"),
+			readAnnotation(req, "kube-sentinel.io/drill-rollback-latency-p95-ms"),
+			readAnnotation(req, "kube-sentinel.io/drill-gate-bypass-count"),
+			readAnnotation(req, "kube-sentinel.io/recent-drill-score"),
+		),
+	})
+	event.RiskLevel = summary.RiskLevel
+	event.StrategyMode = summary.StrategyMode
+	event.CircuitTier = summary.CircuitTier
+	event.OnCallTemplate = summary.OnCallTemplate.Decision + ":" + summary.OnCallTemplate.Runbook
+	event.ReleaseReadiness = summary.Serialize()
+	event.OperatorOverride = summary.OperatorOverride.Actor
+
+	if shouldEnforceReleaseReadiness(req) {
+		maxOpenIncidents := maxOpenIncidentsFromAnnotations(req)
+		enforcedDecision, enforcedReason := summary.EnforceProductionGate(maxOpenIncidents)
+		if enforcedDecision == observability.DecisionBlock {
+			gateOutcome = observability.DecisionBlock
+			if req.Status.BlockReasonCode == "" {
+				req.Status.BlockReasonCode = enforcedReason
+			}
+			if !strings.Contains(req.Status.LastGateDecision, enforcedReason) {
+				req.Status.LastGateDecision = strings.TrimSpace(req.Status.LastGateDecision + " reason_code=" + enforcedReason)
+			}
+			event.GateResult = req.Status.LastGateDecision
+		}
+	}
+	if summaryErr != nil && req.Status.BlockReasonCode == "" {
+		req.Status.BlockReasonCode = "release_readiness_summary_incomplete"
+	}
+	event.Decision = gateOutcome
 	event.EvidenceComplete = event.IsProductionGateReportComplete()
 	req.Status.GateOutcome = gateOutcome
 	req.Status.GateReasonCode = reasonCode
@@ -603,7 +649,82 @@ func (o *Orchestrator) writeAudit(req *ksv1alpha1.HealingRequest, result, afterS
 	o.AuditSink.Write(event)
 	if o.Metrics != nil {
 		o.Metrics.IncProductionGateReport(event.EvidenceComplete)
+		o.Metrics.IncReleaseReadinessSummary(gateOutcome)
+		o.Metrics.SetReleaseReadinessStaleness(0)
+		if summary.OperatorOverride.Enabled {
+			o.Metrics.IncReleaseReadinessOverride()
+		}
 	}
+}
+
+func readAnnotation(req *ksv1alpha1.HealingRequest, key string) string {
+	if req == nil || req.Annotations == nil {
+		return ""
+	}
+	return strings.TrimSpace(req.Annotations[key])
+}
+
+func shouldEnforceReleaseReadiness(req *ksv1alpha1.HealingRequest) bool {
+	return strings.EqualFold(readAnnotation(req, "kube-sentinel.io/release-readiness-enforce"), "true")
+}
+
+func maxOpenIncidentsFromAnnotations(req *ksv1alpha1.HealingRequest) int {
+	raw := readAnnotation(req, "kube-sentinel.io/max-open-incidents")
+	if raw == "" {
+		return 3
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 3
+	}
+	return value
+}
+
+func strategyModeFromPhase(phase ksv1alpha1.HealingPhase) string {
+	switch phase {
+	case ksv1alpha1.PhaseCompleted:
+		return "auto"
+	case ksv1alpha1.PhaseL3:
+		return "manual"
+	default:
+		return strings.ToLower(string(phase))
+	}
+}
+
+func riskLevelFromDecision(decision string) string {
+	if strings.Contains(decision, "outcome=block") {
+		return "high"
+	}
+	if strings.Contains(decision, "outcome=degrade") {
+		return "medium"
+	}
+	return "low"
+}
+
+func circuitTierFromStatus(status ksv1alpha1.CircuitBreakerStatus) string {
+	if status.DomainOpen {
+		return "domain"
+	}
+	if status.ObjectOpen {
+		return "object"
+	}
+	return "none"
+}
+
+func operatorOverrideFromAnnotations(req *ksv1alpha1.HealingRequest) observability.OperatorOverride {
+	override := observability.OperatorOverride{
+		Enabled:          strings.EqualFold(readAnnotation(req, "kube-sentinel.io/operator-override"), "true"),
+		Actor:            readAnnotation(req, "kube-sentinel.io/operator-override-by"),
+		Reason:           readAnnotation(req, "kube-sentinel.io/operator-override-reason"),
+		PreviousDecision: readAnnotation(req, "kube-sentinel.io/operator-override-from"),
+		NewDecision:      readAnnotation(req, "kube-sentinel.io/operator-override-to"),
+	}
+	if at := readAnnotation(req, "kube-sentinel.io/operator-override-at"); at != "" {
+		if parsed, err := time.Parse(time.RFC3339, at); err == nil {
+			override.At = parsed
+		}
+	}
+	return override
 }
 
 func (o *Orchestrator) emitRuntimeEvent(req *ksv1alpha1.HealingRequest, eventType, reason, message string) {

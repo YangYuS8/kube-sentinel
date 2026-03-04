@@ -26,6 +26,9 @@
 - 演练脚本必须输出 incident 证据：级别、恢复条件、runbook 标识
 - 演练脚本必须输出灰度闭环证据：`rollout.canaryStable`、`rollout.rollbackHit`、`rollout.tuningApproved`、`rollout.recoveryObserved`
 - 演练脚本必须校验复盘字段：`postmortem.breachReason`、`postmortem.mitigationAction`、`postmortem.thresholdDecision`、`postmortem.observationPlan`
+- 发布就绪摘要必须包含：`actionType/riskLevel/strategyMode/circuitTier/rollbackCandidate/openIncidents/recentDrillScore`
+- 值班模板映射必须覆盖：`allow/degrade/block`，并输出对应 runbook 与审批触发点
+- 人工覆盖触发时必须输出审计证据：`operatorOverride.by/from/to/reason/at`
 
 ## 失败路径
 

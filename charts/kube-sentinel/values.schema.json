@@ -118,6 +118,30 @@
           },
           "required": ["sampleWindowMinutes", "failureRatioBlockPercent"]
         },
+        "releaseReadinessPolicy": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "maxOpenIncidents": { "type": "integer", "minimum": 0 },
+            "requireRollbackCandidate": { "type": "boolean" },
+            "drillEvidenceTTLMinutes": { "type": "integer", "minimum": 1 },
+            "allowedDecisions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": ["allow", "degrade", "block"]
+              },
+              "minItems": 1
+            }
+          },
+          "required": [
+            "enabled",
+            "maxOpenIncidents",
+            "requireRollbackCandidate",
+            "drillEvidenceTTLMinutes",
+            "allowedDecisions"
+          ]
+        },
         "apiContractPolicy": {
           "type": "object",
           "properties": {
@@ -240,6 +264,7 @@
         "statefulSetPolicy",
         "deploymentPolicy",
         "productionGatePolicy",
+        "releaseReadinessPolicy",
         "apiContractPolicy",
         "maintenanceWindows",
         "soakTimePolicies",

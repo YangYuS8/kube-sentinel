@@ -128,6 +128,66 @@ assert_postmortem_fields() {
   echo "ASSERTION OK: 复盘字段齐全"
 }
 
+emit_release_readiness_summary() {
+  local outcome="$(normalize_outcome "${1:-degrade}")"
+  local action_type="${RELEASE_READINESS_ACTION_TYPE:-restart}"
+  local risk_level="${RELEASE_READINESS_RISK_LEVEL:-medium}"
+  local strategy_mode="${RELEASE_READINESS_STRATEGY_MODE:-auto}"
+  local circuit_tier="${RELEASE_READINESS_CIRCUIT_TIER:-none}"
+  local rollback_candidate="${RELEASE_READINESS_ROLLBACK_CANDIDATE:-latest-healthy-revision}"
+  local open_incidents="${RELEASE_READINESS_OPEN_INCIDENTS:-0}"
+  local drill_success_rate="${RELEASE_READINESS_DRILL_SUCCESS_RATE:-1.0}"
+  local drill_rollback_p95_ms="${RELEASE_READINESS_DRILL_ROLLBACK_P95_MS:-0}"
+  local drill_gate_bypass_count="${RELEASE_READINESS_DRILL_GATE_BYPASS_COUNT:-0}"
+  echo "INFO: releaseReadiness.actionType=$action_type"
+  echo "INFO: releaseReadiness.riskLevel=$risk_level"
+  echo "INFO: releaseReadiness.strategyMode=$strategy_mode"
+  echo "INFO: releaseReadiness.circuitTier=$circuit_tier"
+  echo "INFO: releaseReadiness.rollbackCandidate=$rollback_candidate"
+  echo "INFO: releaseReadiness.openIncidents=$open_incidents"
+  echo "INFO: releaseReadiness.decision=$outcome"
+  echo "INFO: releaseReadiness.drill.successRate=$drill_success_rate"
+  echo "INFO: releaseReadiness.drill.rollbackLatencyP95Ms=$drill_rollback_p95_ms"
+  echo "INFO: releaseReadiness.drill.gateBypassCount=$drill_gate_bypass_count"
+  if [[ -z "$rollback_candidate" ]]; then
+    echo "ASSERTION FAILED: 发布就绪摘要缺少 rollbackCandidate"
+    exit 1
+  fi
+  if ! [[ "$open_incidents" =~ ^[0-9]+$ ]]; then
+    echo "ASSERTION FAILED: openIncidents 必须是整数"
+    exit 1
+  fi
+  if [[ "$outcome" != "allow" && "$outcome" != "degrade" && "$outcome" != "block" ]]; then
+    echo "ASSERTION FAILED: release readiness decision 不合法"
+    exit 1
+  fi
+}
+
+assert_oncall_template_for_outcome() {
+  local outcome="$(normalize_outcome "${1:-degrade}")"
+  local alert_level="${ONCALL_ALERT_LEVEL:-}"
+  local runbook="${ONCALL_RUNBOOK:-}"
+  local approval="${ONCALL_APPROVAL_TRIGGER:-}"
+  local rollback_action="${ONCALL_ROLLBACK_ACTION:-}"
+  if [[ -z "$alert_level" || -z "$runbook" || -z "$approval" || -z "$rollback_action" ]]; then
+    echo "ASSERTION FAILED: 值班模板关键字段缺失"
+    exit 1
+  fi
+  if [[ "$outcome" == "block" && "$alert_level" != "critical" ]]; then
+    echo "ASSERTION FAILED: block 必须映射 critical 值班级别"
+    exit 1
+  fi
+  if [[ "$outcome" == "degrade" && "$alert_level" != "warning" ]]; then
+    echo "ASSERTION FAILED: degrade 必须映射 warning 值班级别"
+    exit 1
+  fi
+  if [[ "$outcome" == "allow" && "$alert_level" != "info" ]]; then
+    echo "ASSERTION FAILED: allow 必须映射 info 值班级别"
+    exit 1
+  fi
+  echo "ASSERTION OK: 值班模板字段完整且等级映射正确"
+}
+
 echo "[1/4] 触发 Deployment 告警事件"
 kubectl -n "$NAMESPACE" port-forward svc/kube-sentinel 8090:8090 >/tmp/kube-sentinel-pf.log 2>&1 &
 PF_PID=$!
@@ -231,6 +291,8 @@ echo "ASSERTION OK: Deployment 分层阶段证据已输出"
 dep_reason=$(kubectl -n default get healingrequest hr-demo-app -o jsonpath='{.status.blockReasonCode}' 2>/dev/null || true)
 dep_outcome=$(classify_outcome "$dep_phase" "$dep_reason" "$dep_l2_result" "$dep_l2_decision")
 echo "INFO: hr-demo-app gateOutcome=$dep_outcome"
+emit_release_readiness_summary "$dep_outcome"
+assert_oncall_template_for_outcome "$dep_outcome"
 assert_precommit_ci_consistency
 assert_slo_semantics_consistency "$dep_outcome"
 emit_incident_evidence "$dep_outcome"

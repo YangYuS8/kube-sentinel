@@ -44,6 +44,24 @@
 - 风险等级：`QUALITY_GATE_API_RISK_LEVEL`
 - 发布判定：`QUALITY_GATE_RELEASE_DECISION`
 
+## 发布就绪摘要读取（最小）
+
+- 摘要字段：`QUALITY_GATE_RELEASE_READINESS_ACTION_TYPE`、`QUALITY_GATE_RELEASE_READINESS_RISK_LEVEL`、`QUALITY_GATE_RELEASE_READINESS_STRATEGY_MODE`、`QUALITY_GATE_RELEASE_READINESS_CIRCUIT_TIER`。
+- 关键证据：`QUALITY_GATE_RELEASE_READINESS_ROLLBACK_CANDIDATE`、`QUALITY_GATE_RELEASE_READINESS_OPEN_INCIDENTS`、`QUALITY_GATE_RELEASE_READINESS_RECENT_DRILL_SCORE`。
+- 演练聚合：`QUALITY_GATE_DRILL_SUCCESS_RATE`、`QUALITY_GATE_DRILL_ROLLBACK_P95_MS`、`QUALITY_GATE_DRILL_GATE_BYPASS_COUNT`。
+- 判定一致性：`QUALITY_GATE_RELEASE_READINESS_DECISION` 必须与 `QUALITY_GATE_RELEASE_DECISION` 一致。
+
+## 值班动作模板执行（最小）
+
+- `allow`：`info` 级别，执行 `runbook://runtime-observation`，30 分钟观察窗口。
+- `degrade`：`warning` 级别，执行 `runbook://runtime-degrade-recovery`，需 oncall 确认并准备回滚。
+- `block`：`critical` 级别，执行 `runbook://runtime-block-rollback`，需 incident commander 审批并执行回滚。
+
+## 人工覆盖审计（最小）
+
+- 触发人工覆盖时，必须记录覆盖人、覆盖前后判定、覆盖原因与时间戳。
+- 覆盖记录必须进入审计事件并关联 `correlationKey`，用于后续复盘。
+
 ## 验收矩阵（最小）
 
 - `allow`：`make quality-gate` 全部通过，允许推进发布步骤。

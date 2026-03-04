@@ -106,6 +106,41 @@ emit_api_contract_fields() {
   echo "QUALITY_GATE_RELEASE_DECISION=${release_decision}"
 }
 
+normalize_bool() {
+  local value="${1:-false}"
+  case "$value" in
+    true|false) echo "$value" ;;
+    *) echo "false" ;;
+  esac
+}
+
+emit_release_readiness_fields() {
+  local action_type="${QUALITY_GATE_RELEASE_READINESS_ACTION_TYPE:-restart}"
+  local risk_level="${QUALITY_GATE_RELEASE_READINESS_RISK_LEVEL:-low}"
+  local strategy_mode="${QUALITY_GATE_RELEASE_READINESS_STRATEGY_MODE:-auto}"
+  local circuit_tier="${QUALITY_GATE_RELEASE_READINESS_CIRCUIT_TIER:-none}"
+  local operator_override="$(normalize_bool "${QUALITY_GATE_RELEASE_READINESS_OPERATOR_OVERRIDE:-false}")"
+  local rollback_candidate="${QUALITY_GATE_RELEASE_READINESS_ROLLBACK_CANDIDATE:-latest-healthy-revision}"
+  local open_incidents="${QUALITY_GATE_RELEASE_READINESS_OPEN_INCIDENTS:-0}"
+  local recent_drill_score="${QUALITY_GATE_RELEASE_READINESS_RECENT_DRILL_SCORE:-1.0}"
+  local drill_success_rate="${QUALITY_GATE_DRILL_SUCCESS_RATE:-1.0}"
+  local drill_rollback_p95_ms="${QUALITY_GATE_DRILL_ROLLBACK_P95_MS:-0}"
+  local drill_gate_bypass_count="${QUALITY_GATE_DRILL_GATE_BYPASS_COUNT:-0}"
+  local readiness_decision="$(normalize_outcome "${QUALITY_GATE_RELEASE_READINESS_DECISION:-${QUALITY_GATE_RELEASE_DECISION:-allow}}")"
+  echo "QUALITY_GATE_RELEASE_READINESS_ACTION_TYPE=${action_type}"
+  echo "QUALITY_GATE_RELEASE_READINESS_RISK_LEVEL=${risk_level}"
+  echo "QUALITY_GATE_RELEASE_READINESS_STRATEGY_MODE=${strategy_mode}"
+  echo "QUALITY_GATE_RELEASE_READINESS_CIRCUIT_TIER=${circuit_tier}"
+  echo "QUALITY_GATE_RELEASE_READINESS_OPERATOR_OVERRIDE=${operator_override}"
+  echo "QUALITY_GATE_RELEASE_READINESS_ROLLBACK_CANDIDATE=${rollback_candidate}"
+  echo "QUALITY_GATE_RELEASE_READINESS_OPEN_INCIDENTS=${open_incidents}"
+  echo "QUALITY_GATE_RELEASE_READINESS_RECENT_DRILL_SCORE=${recent_drill_score}"
+  echo "QUALITY_GATE_DRILL_SUCCESS_RATE=${drill_success_rate}"
+  echo "QUALITY_GATE_DRILL_ROLLBACK_P95_MS=${drill_rollback_p95_ms}"
+  echo "QUALITY_GATE_DRILL_GATE_BYPASS_COUNT=${drill_gate_bypass_count}"
+  echo "QUALITY_GATE_RELEASE_READINESS_DECISION=${readiness_decision}"
+}
+
 assert_incident_level_mapping() {
   local outcome="$(normalize_outcome "$1")"
   local incident_level="$2"
@@ -185,6 +220,7 @@ print_failure() {
   echo "QUALITY_GATE_FIX_HINT=${fix_hint}"
   emit_slo_fields "$outcome"
   emit_api_contract_fields
+  emit_release_readiness_fields
 }
 
 run_step() {
@@ -268,13 +304,51 @@ assert_release_gate_contract_binding() {
   return 0
 }
 
+assert_release_readiness_contract() {
+  local rollback_candidate="${QUALITY_GATE_RELEASE_READINESS_ROLLBACK_CANDIDATE:-latest-healthy-revision}"
+  local open_incidents="${QUALITY_GATE_RELEASE_READINESS_OPEN_INCIDENTS:-0}"
+  local max_open_incidents="${QUALITY_GATE_RELEASE_MAX_OPEN_INCIDENTS:-3}"
+  local readiness_decision="$(normalize_outcome "${QUALITY_GATE_RELEASE_READINESS_DECISION:-${QUALITY_GATE_RELEASE_DECISION:-allow}}")"
+  local release_decision="$(normalize_outcome "${QUALITY_GATE_RELEASE_DECISION:-allow}")"
+  local allowed_decisions="${QUALITY_GATE_ALLOWED_DECISIONS:-allow,degrade,block}"
+
+  if [[ -z "$rollback_candidate" ]]; then
+    print_failure "runtime_production_gating" "release_readiness_missing_rollback_candidate" "set QUALITY_GATE_RELEASE_READINESS_ROLLBACK_CANDIDATE to a validated healthy revision" "block"
+    return 1
+  fi
+  if ! [[ "$open_incidents" =~ ^[0-9]+$ ]]; then
+    print_failure "runtime_production_gating" "release_readiness_open_incidents_invalid" "set QUALITY_GATE_RELEASE_READINESS_OPEN_INCIDENTS to an integer" "block"
+    return 1
+  fi
+  if ! [[ "$max_open_incidents" =~ ^[0-9]+$ ]]; then
+    print_failure "runtime_production_gating" "release_readiness_max_open_incidents_invalid" "set QUALITY_GATE_RELEASE_MAX_OPEN_INCIDENTS to an integer" "block"
+    return 1
+  fi
+  if (( open_incidents > max_open_incidents )); then
+    print_failure "runtime_production_gating" "release_readiness_open_incidents_exceeded" "reduce active incidents or increase QUALITY_GATE_RELEASE_MAX_OPEN_INCIDENTS via approved policy" "block"
+    return 1
+  fi
+  if [[ "$readiness_decision" != "$release_decision" ]]; then
+    print_failure "runtime_production_gating" "release_readiness_decision_mismatch" "align QUALITY_GATE_RELEASE_READINESS_DECISION with QUALITY_GATE_RELEASE_DECISION" "block"
+    return 1
+  fi
+  case ",$allowed_decisions," in
+    *",${release_decision},"*) ;;
+    *)
+      print_failure "api_crd_helm_sync" "release_decision_not_allowed_by_policy" "set QUALITY_GATE_ALLOWED_DECISIONS to include allow,degrade,block semantics" "block"
+      return 1
+      ;;
+  esac
+  return 0
+}
+
 QUALITY_GATE_CMD_TEST="${QUALITY_GATE_CMD_TEST:-go test ./...}"
 QUALITY_GATE_CMD_RACE="${QUALITY_GATE_CMD_RACE:-go test -race ./internal/controllers ./internal/healing ./internal/safety ./internal/ingestion ./internal/observability}"
 QUALITY_GATE_CMD_VET="${QUALITY_GATE_CMD_VET:-go vet ./...}"
 QUALITY_GATE_CMD_LINT="${QUALITY_GATE_CMD_LINT:-golangci-lint run}"
 QUALITY_GATE_CMD_CRD_CHECK="${QUALITY_GATE_CMD_CRD_CHECK:-bash ./scripts/check-crd-consistency.sh}"
-QUALITY_GATE_CMD_API_CONTRACT_SYNC="${QUALITY_GATE_CMD_API_CONTRACT_SYNC:-go test ./charts/kube-sentinel -run 'TestValuesSchemaIncludesProductionGatePolicy|TestValuesYamlIncludesProductionGatePolicyDefaults|TestValuesSchemaIncludesAPIContractPolicy|TestValuesYamlIncludesAPIContractPolicyDefaults'}"
-QUALITY_GATE_CMD_HELM_SYNC="${QUALITY_GATE_CMD_HELM_SYNC:-go test ./charts/kube-sentinel -run 'TestValuesSchemaIncludesProductionGatePolicy|TestValuesYamlIncludesProductionGatePolicyDefaults|TestValuesSchemaIncludesAPIContractPolicy|TestValuesYamlIncludesAPIContractPolicyDefaults'}"
+QUALITY_GATE_CMD_API_CONTRACT_SYNC="${QUALITY_GATE_CMD_API_CONTRACT_SYNC:-go test ./charts/kube-sentinel -run 'TestValuesSchemaIncludesProductionGatePolicy|TestValuesYamlIncludesProductionGatePolicyDefaults|TestValuesSchemaIncludesAPIContractPolicy|TestValuesYamlIncludesAPIContractPolicyDefaults|TestValuesSchemaIncludesReleaseReadinessPolicy|TestValuesYamlIncludesReleaseReadinessPolicyDefaults'}"
+QUALITY_GATE_CMD_HELM_SYNC="${QUALITY_GATE_CMD_HELM_SYNC:-go test ./charts/kube-sentinel -run 'TestValuesSchemaIncludesProductionGatePolicy|TestValuesYamlIncludesProductionGatePolicyDefaults|TestValuesSchemaIncludesAPIContractPolicy|TestValuesYamlIncludesAPIContractPolicyDefaults|TestValuesSchemaIncludesReleaseReadinessPolicy|TestValuesYamlIncludesReleaseReadinessPolicyDefaults'}"
 
 run_step "unit_test" "unit_test" "unit_tests_failed" "run: go test ./..." "$QUALITY_GATE_CMD_TEST"
 run_step "race_core" "race" "race_detection_failed" "run: go test -race ./internal/..." "$QUALITY_GATE_CMD_RACE"
@@ -288,6 +362,7 @@ assert_slo_consistency "allow"
 assert_recovery_ready "allow"
 assert_api_contract_consistency
 assert_release_gate_contract_binding
+assert_release_readiness_contract
 
 incident_level="${QUALITY_GATE_INCIDENT_LEVEL:-$(derive_incident_level "allow")}"
 assert_incident_level_mapping "allow" "$incident_level"
@@ -298,3 +373,4 @@ echo "QUALITY_GATE_CATEGORY=quality_gate"
 echo "QUALITY_GATE_REASON=all_checks_passed"
 emit_slo_fields "allow"
 emit_api_contract_fields
+emit_release_readiness_fields

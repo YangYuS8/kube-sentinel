@@ -36,6 +36,8 @@ type Metrics struct {
 	DeploymentStageBlocks      uint64
 	ProductionGateReports      uint64
 	GateReportMissingFields    uint64
+	ReleaseReadinessSummaries  uint64
+	ReleaseReadinessOverrides  uint64
 }
 
 var (
@@ -135,6 +137,18 @@ var (
 		Name: "kube_sentinel_production_gate_report_missing_fields_total",
 		Help: "Total number of production gate reports missing required fields.",
 	})
+	releaseReadinessSummaryCounter = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "kube_sentinel_release_readiness_summary_total",
+		Help: "Total number of generated release readiness summaries grouped by decision.",
+	}, []string{"decision"})
+	releaseReadinessStalenessGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "kube_sentinel_release_readiness_staleness_seconds",
+		Help: "Age in seconds for the most recent release readiness summary evidence.",
+	})
+	releaseReadinessOverrideCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "kube_sentinel_release_readiness_override_total",
+		Help: "Total number of manual operator overrides in release readiness flow.",
+	})
 )
 
 func registerPrometheusMetrics() {
@@ -163,6 +177,9 @@ func registerPrometheusMetrics() {
 			deploymentStageBlocksCounter,
 			productionGateReportsCounter,
 			productionGateReportMissingFieldsCounter,
+			releaseReadinessSummaryCounter,
+			releaseReadinessStalenessGauge,
+			releaseReadinessOverrideCounter,
 		)
 	})
 }
@@ -360,6 +377,36 @@ func (m *Metrics) IncProductionGateReport(complete bool) {
 	if !complete {
 		atomic.AddUint64(&m.GateReportMissingFields, 1)
 		productionGateReportMissingFieldsCounter.Inc()
+	}
+}
+
+func (m *Metrics) IncReleaseReadinessSummary(decision string) {
+	registerPrometheusMetrics()
+	decision = sanitizeReleaseDecisionLabel(decision)
+	atomic.AddUint64(&m.ReleaseReadinessSummaries, 1)
+	releaseReadinessSummaryCounter.WithLabelValues(decision).Inc()
+}
+
+func (m *Metrics) SetReleaseReadinessStaleness(seconds int) {
+	registerPrometheusMetrics()
+	if seconds < 0 {
+		seconds = 0
+	}
+	releaseReadinessStalenessGauge.Set(float64(seconds))
+}
+
+func (m *Metrics) IncReleaseReadinessOverride() {
+	registerPrometheusMetrics()
+	atomic.AddUint64(&m.ReleaseReadinessOverrides, 1)
+	releaseReadinessOverrideCounter.Inc()
+}
+
+func sanitizeReleaseDecisionLabel(decision string) string {
+	switch decision {
+	case "allow", "degrade", "block":
+		return decision
+	default:
+		return "unknown"
 	}
 }
 

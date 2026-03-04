@@ -562,6 +562,63 @@ func TestOrchestratorShadowActionEventAuditConsistency(t *testing.T) {
 	}
 }
 
+func TestOrchestratorReleaseReadinessBlockWhenMissingRollbackCandidate(t *testing.T) {
+	req := newReq()
+	req.Annotations = map[string]string{
+		"kube-sentinel.io/release-readiness-enforce": "true",
+		"kube-sentinel.io/open-incidents":            "inc-a",
+	}
+	audits := &observability.MemoryAuditSink{}
+	o := &Orchestrator{
+		Adapter:     fakeAdapter{supports: true},
+		Snapshotter: &MemorySnapshotter{},
+		AuditSink:   audits,
+		Now:         func() time.Time { return time.Unix(120, 0) },
+	}
+	if err := o.Process(context.Background(), req); err != nil {
+		t.Fatalf("expected process to succeed with audit evidence: %v", err)
+	}
+	if req.Status.GateOutcome != "block" {
+		t.Fatalf("expected enforced release readiness block, got %s", req.Status.GateOutcome)
+	}
+	if req.Status.BlockReasonCode != "release_readiness_missing_rollback_candidate" {
+		t.Fatalf("unexpected reason code: %s", req.Status.BlockReasonCode)
+	}
+	if len(audits.Events) == 0 || !strings.Contains(audits.Events[len(audits.Events)-1].ReleaseReadiness, "openIncidents") {
+		t.Fatalf("expected release readiness summary in audit")
+	}
+}
+
+func TestOrchestratorReleaseReadinessOperatorOverrideTracked(t *testing.T) {
+	req := newReq()
+	req.Annotations = map[string]string{
+		"kube-sentinel.io/operator-override":        "true",
+		"kube-sentinel.io/operator-override-by":     "oncall-a",
+		"kube-sentinel.io/operator-override-reason": "manual approval",
+		"kube-sentinel.io/operator-override-from":   "degrade",
+		"kube-sentinel.io/operator-override-to":     "allow",
+		"kube-sentinel.io/open-incidents":           "",
+	}
+	revisions := []RevisionRecord{{Revision: "rev-ok", UnixTime: 100, Healthy: true}}
+	metrics := &observability.Metrics{}
+	audits := &observability.MemoryAuditSink{}
+	o := &Orchestrator{
+		Adapter:     fakeAdapter{supports: true, deploymentActionErr: errors.New("l1 failed"), revisions: revisions},
+		Metrics:     metrics,
+		AuditSink:   audits,
+		Snapshotter: &MemorySnapshotter{},
+	}
+	if err := o.Process(context.Background(), req); err != nil {
+		t.Fatalf("expected process succeed: %v", err)
+	}
+	if metrics.ReleaseReadinessOverrides == 0 {
+		t.Fatalf("expected override metric increment")
+	}
+	if len(audits.Events) == 0 || audits.Events[len(audits.Events)-1].OperatorOverride != "oncall-a" {
+		t.Fatalf("expected override actor in audit")
+	}
+}
+
 func TestOrchestratorStatefulSetReadOnlyBlocked(t *testing.T) {
 	req := newReq()
 	req.Spec.Workload.Kind = "StatefulSet"

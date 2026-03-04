@@ -24,6 +24,12 @@
     "gh": true,
     "diff": true,
     "true": true,
-    "controller-gen": true
+    "controller-gen": true,
+    "command": true,
+    "ssh": true,
+    "kubectl config": true,
+    "kubectl get": true,
+    "kubectl apply": true,
+    "kubectl -n default": true
   }
 }

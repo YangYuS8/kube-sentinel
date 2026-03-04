@@ -35,6 +35,15 @@ healingRequest:
   productionGatePolicy:
     sampleWindowMinutes: 10
     failureRatioBlockPercent: 30
+  releaseReadinessPolicy:
+    enabled: true
+    maxOpenIncidents: 3
+    requireRollbackCandidate: true
+    drillEvidenceTTLMinutes: 60
+    allowedDecisions:
+      - allow
+      - degrade
+      - block
   apiContractPolicy:
     compatibilityClass: backward-compatible
     migrationPlanRef: ''

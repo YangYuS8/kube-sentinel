@@ -8,14 +8,20 @@ type AuditEvent struct {
 	Target            string
 	WorkloadKind      string
 	ActionType        string
+	RiskLevel         string
+	StrategyMode      string
+	CircuitTier       string
 	Phase             string
 	SnapshotID        string
 	Decision          string
+	OnCallTemplate    string
+	OperatorOverride  string
 	FreezeState       string
 	BeforeState       string
 	AfterState        string
 	Result            string
 	GateResult        string
+	ReleaseReadiness  string
 	GateViolations    []string
 	RecoveryCondition string
 	Recommendation    string

@@ -49,6 +49,9 @@ func TestQualityGateOrderAllPass(t *testing.T) {
 		"QUALITY_GATE_API_COMPATIBILITY_CLASS=backward-compatible",
 		"QUALITY_GATE_API_RISK_LEVEL=low",
 		"QUALITY_GATE_RELEASE_DECISION=allow",
+		"QUALITY_GATE_RELEASE_READINESS_ACTION_TYPE=restart",
+		"QUALITY_GATE_RELEASE_READINESS_DECISION=allow",
+		"QUALITY_GATE_DRILL_SUCCESS_RATE=1.0",
 	} {
 		if !strings.Contains(output, token) {
 			t.Fatalf("expected token %s in output: %s", token, output)
@@ -67,6 +70,67 @@ func TestQualityGateOrderAllPass(t *testing.T) {
 		if got[index] != want[index] {
 			t.Fatalf("unexpected step order at %d: got %s want %s", index, got[index], want[index])
 		}
+	}
+}
+
+func TestQualityGateBlocksWhenReleaseReadinessCandidateMissing(t *testing.T) {
+	env := map[string]string{
+		"QUALITY_GATE_CMD_TEST":                             "true",
+		"QUALITY_GATE_CMD_RACE":                             "true",
+		"QUALITY_GATE_CMD_VET":                              "true",
+		"QUALITY_GATE_CMD_LINT":                             "true",
+		"QUALITY_GATE_CMD_CRD_CHECK":                        "true",
+		"QUALITY_GATE_CMD_API_CONTRACT_SYNC":                "true",
+		"QUALITY_GATE_CMD_HELM_SYNC":                        "true",
+		"QUALITY_GATE_RELEASE_READINESS_ROLLBACK_CANDIDATE": "",
+	}
+	output, err := runQualityGate(t, env)
+	if err == nil {
+		t.Fatalf("expected missing rollback candidate to fail, output: %s", output)
+	}
+	if !strings.Contains(output, "QUALITY_GATE_REASON=release_readiness_missing_rollback_candidate") {
+		t.Fatalf("expected missing rollback reason, output: %s", output)
+	}
+}
+
+func TestQualityGateBlocksWhenReleaseReadinessIncidentsExceeded(t *testing.T) {
+	env := map[string]string{
+		"QUALITY_GATE_CMD_TEST":                         "true",
+		"QUALITY_GATE_CMD_RACE":                         "true",
+		"QUALITY_GATE_CMD_VET":                          "true",
+		"QUALITY_GATE_CMD_LINT":                         "true",
+		"QUALITY_GATE_CMD_CRD_CHECK":                    "true",
+		"QUALITY_GATE_CMD_API_CONTRACT_SYNC":            "true",
+		"QUALITY_GATE_CMD_HELM_SYNC":                    "true",
+		"QUALITY_GATE_RELEASE_READINESS_OPEN_INCIDENTS": "4",
+		"QUALITY_GATE_RELEASE_MAX_OPEN_INCIDENTS":       "3",
+	}
+	output, err := runQualityGate(t, env)
+	if err == nil {
+		t.Fatalf("expected incidents exceeded to fail, output: %s", output)
+	}
+	if !strings.Contains(output, "QUALITY_GATE_REASON=release_readiness_open_incidents_exceeded") {
+		t.Fatalf("expected incident exceeded reason, output: %s", output)
+	}
+}
+
+func TestQualityGateBlocksWhenDecisionNotAllowedByPolicy(t *testing.T) {
+	env := map[string]string{
+		"QUALITY_GATE_CMD_TEST":              "true",
+		"QUALITY_GATE_CMD_RACE":              "true",
+		"QUALITY_GATE_CMD_VET":               "true",
+		"QUALITY_GATE_CMD_LINT":              "true",
+		"QUALITY_GATE_CMD_CRD_CHECK":         "true",
+		"QUALITY_GATE_CMD_API_CONTRACT_SYNC": "true",
+		"QUALITY_GATE_CMD_HELM_SYNC":         "true",
+		"QUALITY_GATE_ALLOWED_DECISIONS":     "degrade,block",
+	}
+	output, err := runQualityGate(t, env)
+	if err == nil {
+		t.Fatalf("expected policy mismatch to fail, output: %s", output)
+	}
+	if !strings.Contains(output, "QUALITY_GATE_REASON=release_decision_not_allowed_by_policy") {
+		t.Fatalf("expected policy mismatch reason, output: %s", output)
 	}
 }
 

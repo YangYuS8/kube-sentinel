@@ -65,6 +65,54 @@ func TestValuesSchemaIncludesAPIContractPolicy(t *testing.T) {
 	}
 }
 
+func TestValuesSchemaIncludesReleaseReadinessPolicy(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("values.schema.json"))
+	if err != nil {
+		t.Fatalf("read schema failed: %v", err)
+	}
+	var schema map[string]interface{}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("unmarshal schema failed: %v", err)
+	}
+	properties := schema["properties"].(map[string]interface{})
+	healingRequest := properties["healingRequest"].(map[string]interface{})
+	healingProperties := healingRequest["properties"].(map[string]interface{})
+	releasePolicy, ok := healingProperties["releaseReadinessPolicy"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("releaseReadinessPolicy missing in healingRequest properties")
+	}
+	required := releasePolicy["required"].([]interface{})
+	if len(required) != 5 {
+		t.Fatalf("unexpected releaseReadinessPolicy required fields: %#v", required)
+	}
+	allowedDecisions := releasePolicy["properties"].(map[string]interface{})["allowedDecisions"].(map[string]interface{})
+	if allowedDecisions["type"].(string) != "array" {
+		t.Fatalf("allowedDecisions should be array")
+	}
+}
+
+func TestValuesYamlIncludesReleaseReadinessPolicyDefaults(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("values.yaml"))
+	if err != nil {
+		t.Fatalf("read values yaml failed: %v", err)
+	}
+	content := string(raw)
+	for _, token := range []string{
+		"releaseReadinessPolicy:",
+		"enabled: true",
+		"maxOpenIncidents: 3",
+		"requireRollbackCandidate: true",
+		"drillEvidenceTTLMinutes: 60",
+		"- allow",
+		"- degrade",
+		"- block",
+	} {
+		if !strings.Contains(content, token) {
+			t.Fatalf("values.yaml missing %s", token)
+		}
+	}
+}
+
 func TestValuesYamlIncludesAPIContractPolicyDefaults(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("values.yaml"))
 	if err != nil {
