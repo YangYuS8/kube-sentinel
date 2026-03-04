@@ -24,13 +24,14 @@ func TestQualityGateOrderAllPass(t *testing.T) {
 	tempDir := t.TempDir()
 	tracePath := filepath.Join(tempDir, "trace.log")
 	env := map[string]string{
-		"QUALITY_GATE_TRACE_FILE":    tracePath,
-		"QUALITY_GATE_CMD_TEST":      "true",
-		"QUALITY_GATE_CMD_RACE":      "true",
-		"QUALITY_GATE_CMD_VET":       "true",
-		"QUALITY_GATE_CMD_LINT":      "true",
-		"QUALITY_GATE_CMD_CRD_CHECK": "true",
-		"QUALITY_GATE_CMD_HELM_SYNC": "true",
+		"QUALITY_GATE_TRACE_FILE":            tracePath,
+		"QUALITY_GATE_CMD_TEST":              "true",
+		"QUALITY_GATE_CMD_RACE":              "true",
+		"QUALITY_GATE_CMD_VET":               "true",
+		"QUALITY_GATE_CMD_LINT":              "true",
+		"QUALITY_GATE_CMD_CRD_CHECK":         "true",
+		"QUALITY_GATE_CMD_API_CONTRACT_SYNC": "true",
+		"QUALITY_GATE_CMD_HELM_SYNC":         "true",
 	}
 	output, err := runQualityGate(t, env)
 	if err != nil {
@@ -45,6 +46,9 @@ func TestQualityGateOrderAllPass(t *testing.T) {
 		"QUALITY_GATE_INCIDENT_LEVEL=info",
 		"QUALITY_GATE_RECOVERY_CONDITION=maintain_target_and_observe",
 		"QUALITY_GATE_RUNBOOK=runbook://runtime-observation",
+		"QUALITY_GATE_API_COMPATIBILITY_CLASS=backward-compatible",
+		"QUALITY_GATE_API_RISK_LEVEL=low",
+		"QUALITY_GATE_RELEASE_DECISION=allow",
 	} {
 		if !strings.Contains(output, token) {
 			t.Fatalf("expected token %s in output: %s", token, output)
@@ -55,7 +59,7 @@ func TestQualityGateOrderAllPass(t *testing.T) {
 		t.Fatalf("read trace failed: %v", err)
 	}
 	got := strings.Split(strings.TrimSpace(string(traceRaw)), "\n")
-	want := []string{"unit_test", "race_core", "vet", "lint", "crd_consistency", "helm_sync"}
+	want := []string{"unit_test", "race_core", "vet", "lint", "crd_consistency", "api_contract_sync", "helm_sync"}
 	if len(got) != len(want) {
 		t.Fatalf("unexpected step count: got %d want %d (%v)", len(got), len(want), got)
 	}
@@ -70,13 +74,14 @@ func TestQualityGateStopsOnFirstFailure(t *testing.T) {
 	tempDir := t.TempDir()
 	tracePath := filepath.Join(tempDir, "trace.log")
 	env := map[string]string{
-		"QUALITY_GATE_TRACE_FILE":    tracePath,
-		"QUALITY_GATE_CMD_TEST":      "true",
-		"QUALITY_GATE_CMD_RACE":      "true",
-		"QUALITY_GATE_CMD_VET":       "true",
-		"QUALITY_GATE_CMD_LINT":      "false",
-		"QUALITY_GATE_CMD_CRD_CHECK": "true",
-		"QUALITY_GATE_CMD_HELM_SYNC": "true",
+		"QUALITY_GATE_TRACE_FILE":            tracePath,
+		"QUALITY_GATE_CMD_TEST":              "true",
+		"QUALITY_GATE_CMD_RACE":              "true",
+		"QUALITY_GATE_CMD_VET":               "true",
+		"QUALITY_GATE_CMD_LINT":              "false",
+		"QUALITY_GATE_CMD_CRD_CHECK":         "true",
+		"QUALITY_GATE_CMD_API_CONTRACT_SYNC": "true",
+		"QUALITY_GATE_CMD_HELM_SYNC":         "true",
 	}
 	output, err := runQualityGate(t, env)
 	if err == nil {
@@ -106,13 +111,14 @@ func TestQualityGateStopsOnFirstFailure(t *testing.T) {
 
 func TestQualityGateBlocksOnSLOSemanticMismatch(t *testing.T) {
 	env := map[string]string{
-		"QUALITY_GATE_CMD_TEST":         "true",
-		"QUALITY_GATE_CMD_RACE":         "true",
-		"QUALITY_GATE_CMD_VET":          "true",
-		"QUALITY_GATE_CMD_LINT":         "true",
-		"QUALITY_GATE_CMD_CRD_CHECK":    "true",
-		"QUALITY_GATE_CMD_HELM_SYNC":    "true",
-		"QUALITY_GATE_SLO_ACTION_LEVEL": "degrade",
+		"QUALITY_GATE_CMD_TEST":              "true",
+		"QUALITY_GATE_CMD_RACE":              "true",
+		"QUALITY_GATE_CMD_VET":               "true",
+		"QUALITY_GATE_CMD_LINT":              "true",
+		"QUALITY_GATE_CMD_CRD_CHECK":         "true",
+		"QUALITY_GATE_CMD_API_CONTRACT_SYNC": "true",
+		"QUALITY_GATE_CMD_HELM_SYNC":         "true",
+		"QUALITY_GATE_SLO_ACTION_LEVEL":      "degrade",
 	}
 	output, err := runQualityGate(t, env)
 	if err == nil {
@@ -125,13 +131,14 @@ func TestQualityGateBlocksOnSLOSemanticMismatch(t *testing.T) {
 
 func TestQualityGateBlocksOnIncidentMappingMismatch(t *testing.T) {
 	env := map[string]string{
-		"QUALITY_GATE_CMD_TEST":       "true",
-		"QUALITY_GATE_CMD_RACE":       "true",
-		"QUALITY_GATE_CMD_VET":        "true",
-		"QUALITY_GATE_CMD_LINT":       "true",
-		"QUALITY_GATE_CMD_CRD_CHECK":  "true",
-		"QUALITY_GATE_CMD_HELM_SYNC":  "true",
-		"QUALITY_GATE_INCIDENT_LEVEL": "critical",
+		"QUALITY_GATE_CMD_TEST":              "true",
+		"QUALITY_GATE_CMD_RACE":              "true",
+		"QUALITY_GATE_CMD_VET":               "true",
+		"QUALITY_GATE_CMD_LINT":              "true",
+		"QUALITY_GATE_CMD_CRD_CHECK":         "true",
+		"QUALITY_GATE_CMD_API_CONTRACT_SYNC": "true",
+		"QUALITY_GATE_CMD_HELM_SYNC":         "true",
+		"QUALITY_GATE_INCIDENT_LEVEL":        "critical",
 	}
 	output, err := runQualityGate(t, env)
 	if err == nil {
@@ -144,14 +151,15 @@ func TestQualityGateBlocksOnIncidentMappingMismatch(t *testing.T) {
 
 func TestQualityGateBlocksWhenRecoveryNotReady(t *testing.T) {
 	env := map[string]string{
-		"QUALITY_GATE_CMD_TEST":           "true",
-		"QUALITY_GATE_CMD_RACE":           "true",
-		"QUALITY_GATE_CMD_VET":            "true",
-		"QUALITY_GATE_CMD_LINT":           "true",
-		"QUALITY_GATE_CMD_CRD_CHECK":      "true",
-		"QUALITY_GATE_CMD_HELM_SYNC":      "true",
-		"QUALITY_GATE_RECOVERY_READY":     "false",
-		"QUALITY_GATE_RECOVERY_CONDITION": "pending_validation",
+		"QUALITY_GATE_CMD_TEST":              "true",
+		"QUALITY_GATE_CMD_RACE":              "true",
+		"QUALITY_GATE_CMD_VET":               "true",
+		"QUALITY_GATE_CMD_LINT":              "true",
+		"QUALITY_GATE_CMD_CRD_CHECK":         "true",
+		"QUALITY_GATE_CMD_API_CONTRACT_SYNC": "true",
+		"QUALITY_GATE_CMD_HELM_SYNC":         "true",
+		"QUALITY_GATE_RECOVERY_READY":        "false",
+		"QUALITY_GATE_RECOVERY_CONDITION":    "pending_validation",
 	}
 	output, err := runQualityGate(t, env)
 	if err == nil {
@@ -171,6 +179,7 @@ func TestQualityGateAlertSuppressionAndDedup(t *testing.T) {
 		"QUALITY_GATE_CMD_VET":                          "true",
 		"QUALITY_GATE_CMD_LINT":                         "true",
 		"QUALITY_GATE_CMD_CRD_CHECK":                    "true",
+		"QUALITY_GATE_CMD_API_CONTRACT_SYNC":            "true",
 		"QUALITY_GATE_CMD_HELM_SYNC":                    "true",
 		"QUALITY_GATE_ALERT_STATE_FILE":                 statePath,
 		"QUALITY_GATE_ALERT_SUPPRESSION_WINDOW_SECONDS": "600",
@@ -191,5 +200,68 @@ func TestQualityGateAlertSuppressionAndDedup(t *testing.T) {
 	}
 	if !strings.Contains(output2, "QUALITY_GATE_ALERT_NOTIFY=false") || !strings.Contains(output2, "QUALITY_GATE_ALERT_SUPPRESSED_COUNT=1") {
 		t.Fatalf("expected suppression on repeated run: %s", output2)
+	}
+}
+
+func TestQualityGateBlocksOnInvalidCompatibilityClass(t *testing.T) {
+	env := map[string]string{
+		"QUALITY_GATE_CMD_TEST":                "true",
+		"QUALITY_GATE_CMD_RACE":                "true",
+		"QUALITY_GATE_CMD_VET":                 "true",
+		"QUALITY_GATE_CMD_LINT":                "true",
+		"QUALITY_GATE_CMD_CRD_CHECK":           "true",
+		"QUALITY_GATE_CMD_API_CONTRACT_SYNC":   "true",
+		"QUALITY_GATE_CMD_HELM_SYNC":           "true",
+		"QUALITY_GATE_API_COMPATIBILITY_CLASS": "breaking-but-unknown",
+	}
+	output, err := runQualityGate(t, env)
+	if err == nil {
+		t.Fatalf("expected invalid compatibility class to fail, output: %s", output)
+	}
+	if !strings.Contains(output, "QUALITY_GATE_CATEGORY=api_contract") {
+		t.Fatalf("expected api_contract category: %s", output)
+	}
+}
+
+func TestQualityGateBlocksOnMigrationRequiredWithoutPlan(t *testing.T) {
+	env := map[string]string{
+		"QUALITY_GATE_CMD_TEST":                "true",
+		"QUALITY_GATE_CMD_RACE":                "true",
+		"QUALITY_GATE_CMD_VET":                 "true",
+		"QUALITY_GATE_CMD_LINT":                "true",
+		"QUALITY_GATE_CMD_CRD_CHECK":           "true",
+		"QUALITY_GATE_CMD_API_CONTRACT_SYNC":   "true",
+		"QUALITY_GATE_CMD_HELM_SYNC":           "true",
+		"QUALITY_GATE_API_COMPATIBILITY_CLASS": "migration-required",
+		"QUALITY_GATE_MIGRATION_READY":         "true",
+	}
+	output, err := runQualityGate(t, env)
+	if err == nil {
+		t.Fatalf("expected migration-required without plan to fail, output: %s", output)
+	}
+	if !strings.Contains(output, "QUALITY_GATE_REASON=migration_plan_missing") {
+		t.Fatalf("expected migration_plan_missing reason: %s", output)
+	}
+}
+
+func TestQualityGateBlocksOnHighRiskWithoutReleaseApproval(t *testing.T) {
+	env := map[string]string{
+		"QUALITY_GATE_CMD_TEST":                "true",
+		"QUALITY_GATE_CMD_RACE":                "true",
+		"QUALITY_GATE_CMD_VET":                 "true",
+		"QUALITY_GATE_CMD_LINT":                "true",
+		"QUALITY_GATE_CMD_CRD_CHECK":           "true",
+		"QUALITY_GATE_CMD_API_CONTRACT_SYNC":   "true",
+		"QUALITY_GATE_CMD_HELM_SYNC":           "true",
+		"QUALITY_GATE_API_COMPATIBILITY_CLASS": "backward-compatible",
+		"QUALITY_GATE_API_RISK_LEVEL":          "high",
+		"QUALITY_GATE_RELEASE_WINDOW_APPROVED": "false",
+	}
+	output, err := runQualityGate(t, env)
+	if err == nil {
+		t.Fatalf("expected high-risk without release approval to fail, output: %s", output)
+	}
+	if !strings.Contains(output, "QUALITY_GATE_CATEGORY=runtime_production_gating") {
+		t.Fatalf("expected runtime production gating category: %s", output)
 	}
 }

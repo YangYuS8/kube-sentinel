@@ -51,6 +51,22 @@ derive_budget_status() {
   esac
 }
 
+normalize_compatibility_class() {
+  local value="${1:-backward-compatible}"
+  case "$value" in
+    backward-compatible|migration-required|version-bump-required) echo "$value" ;;
+    *) echo "invalid" ;;
+  esac
+}
+
+normalize_risk_level() {
+  local value="${1:-low}"
+  case "$value" in
+    low|medium|high) echo "$value" ;;
+    *) echo "invalid" ;;
+  esac
+}
+
 emit_slo_fields() {
   local outcome="$(normalize_outcome "$1")"
   local budget_status="${QUALITY_GATE_SLO_BUDGET_STATUS:-$(derive_budget_status "$outcome")}"
@@ -64,6 +80,30 @@ emit_slo_fields() {
   echo "QUALITY_GATE_INCIDENT_LEVEL=${incident_level}"
   echo "QUALITY_GATE_RECOVERY_CONDITION=${recovery_condition}"
   echo "QUALITY_GATE_RUNBOOK=${runbook}"
+}
+
+emit_api_contract_fields() {
+  local compatibility_class="$(normalize_compatibility_class "${QUALITY_GATE_API_COMPATIBILITY_CLASS:-backward-compatible}")"
+  local risk_level="$(normalize_risk_level "${QUALITY_GATE_API_RISK_LEVEL:-low}")"
+  local migration_plan="${QUALITY_GATE_API_MIGRATION_PLAN:-}"
+  local version_bump_window="${QUALITY_GATE_VERSION_BUMP_WINDOW:-}"
+  local affected_fields="${QUALITY_GATE_API_AFFECTED_FIELDS:-api/v1alpha1/*}"
+  local release_decision="${QUALITY_GATE_RELEASE_DECISION:-allow}"
+
+  echo "QUALITY_GATE_API_COMPATIBILITY_CLASS=${compatibility_class}"
+  echo "QUALITY_GATE_API_AFFECTED_FIELDS=${affected_fields}"
+  if [[ -n "$migration_plan" ]]; then
+    echo "QUALITY_GATE_API_MIGRATION_PLAN=${migration_plan}"
+  else
+    echo "QUALITY_GATE_API_MIGRATION_PLAN=<none>"
+  fi
+  if [[ -n "$version_bump_window" ]]; then
+    echo "QUALITY_GATE_VERSION_BUMP_WINDOW=${version_bump_window}"
+  else
+    echo "QUALITY_GATE_VERSION_BUMP_WINDOW=<none>"
+  fi
+  echo "QUALITY_GATE_API_RISK_LEVEL=${risk_level}"
+  echo "QUALITY_GATE_RELEASE_DECISION=${release_decision}"
 }
 
 assert_incident_level_mapping() {
@@ -144,6 +184,7 @@ print_failure() {
   echo "QUALITY_GATE_REASON=${reason}"
   echo "QUALITY_GATE_FIX_HINT=${fix_hint}"
   emit_slo_fields "$outcome"
+  emit_api_contract_fields
 }
 
 run_step() {
@@ -181,22 +222,72 @@ assert_recovery_ready() {
   return 0
 }
 
+assert_api_contract_consistency() {
+  local compatibility_class="$(normalize_compatibility_class "${QUALITY_GATE_API_COMPATIBILITY_CLASS:-backward-compatible}")"
+  local risk_level="$(normalize_risk_level "${QUALITY_GATE_API_RISK_LEVEL:-low}")"
+  local migration_plan="${QUALITY_GATE_API_MIGRATION_PLAN:-}"
+  local version_bump_window="${QUALITY_GATE_VERSION_BUMP_WINDOW:-}"
+  if [[ "$compatibility_class" == "invalid" ]]; then
+    print_failure "api_contract" "invalid_compatibility_class" "set QUALITY_GATE_API_COMPATIBILITY_CLASS to backward-compatible|migration-required|version-bump-required" "block"
+    return 1
+  fi
+  if [[ "$risk_level" == "invalid" ]]; then
+    print_failure "api_contract" "invalid_risk_level" "set QUALITY_GATE_API_RISK_LEVEL to low|medium|high" "block"
+    return 1
+  fi
+  if [[ "$compatibility_class" == "migration-required" ]] && [[ -z "$migration_plan" ]]; then
+    print_failure "api_contract" "migration_plan_missing" "set QUALITY_GATE_API_MIGRATION_PLAN for migration-required changes" "block"
+    return 1
+  fi
+  if [[ "$compatibility_class" == "version-bump-required" ]] && [[ -z "$version_bump_window" ]]; then
+    print_failure "api_contract" "version_bump_window_missing" "set QUALITY_GATE_VERSION_BUMP_WINDOW for version-bump-required changes" "block"
+    return 1
+  fi
+  return 0
+}
+
+assert_release_gate_contract_binding() {
+  local compatibility_class="$(normalize_compatibility_class "${QUALITY_GATE_API_COMPATIBILITY_CLASS:-backward-compatible}")"
+  local risk_level="$(normalize_risk_level "${QUALITY_GATE_API_RISK_LEVEL:-low}")"
+  local release_window_approved="${QUALITY_GATE_RELEASE_WINDOW_APPROVED:-false}"
+  local migration_ready="${QUALITY_GATE_MIGRATION_READY:-false}"
+
+  if [[ "$compatibility_class" == "migration-required" ]] && [[ "$migration_ready" != "true" ]]; then
+    print_failure "runtime_production_gating" "migration_condition_not_met" "set QUALITY_GATE_MIGRATION_READY=true after validating migration preconditions" "block"
+    return 1
+  fi
+  if [[ "$compatibility_class" == "version-bump-required" ]] && [[ "$release_window_approved" != "true" ]]; then
+    print_failure "runtime_production_gating" "version_bump_window_not_approved" "set QUALITY_GATE_RELEASE_WINDOW_APPROVED=true for approved version bump window" "block"
+    return 1
+  fi
+  if [[ "$risk_level" == "high" ]] && [[ "$release_window_approved" != "true" ]]; then
+    print_failure "runtime_production_gating" "high_risk_release_not_approved" "set QUALITY_GATE_RELEASE_WINDOW_APPROVED=true for high-risk api contract changes" "block"
+    return 1
+  fi
+  export QUALITY_GATE_RELEASE_DECISION="allow"
+  return 0
+}
+
 QUALITY_GATE_CMD_TEST="${QUALITY_GATE_CMD_TEST:-go test ./...}"
 QUALITY_GATE_CMD_RACE="${QUALITY_GATE_CMD_RACE:-go test -race ./internal/controllers ./internal/healing ./internal/safety ./internal/ingestion ./internal/observability}"
 QUALITY_GATE_CMD_VET="${QUALITY_GATE_CMD_VET:-go vet ./...}"
 QUALITY_GATE_CMD_LINT="${QUALITY_GATE_CMD_LINT:-golangci-lint run}"
 QUALITY_GATE_CMD_CRD_CHECK="${QUALITY_GATE_CMD_CRD_CHECK:-bash ./scripts/check-crd-consistency.sh}"
-QUALITY_GATE_CMD_HELM_SYNC="${QUALITY_GATE_CMD_HELM_SYNC:-go test ./charts/kube-sentinel -run 'TestValuesSchemaIncludesProductionGatePolicy|TestValuesYamlIncludesProductionGatePolicyDefaults'}"
+QUALITY_GATE_CMD_API_CONTRACT_SYNC="${QUALITY_GATE_CMD_API_CONTRACT_SYNC:-go test ./charts/kube-sentinel -run 'TestValuesSchemaIncludesProductionGatePolicy|TestValuesYamlIncludesProductionGatePolicyDefaults|TestValuesSchemaIncludesAPIContractPolicy|TestValuesYamlIncludesAPIContractPolicyDefaults'}"
+QUALITY_GATE_CMD_HELM_SYNC="${QUALITY_GATE_CMD_HELM_SYNC:-go test ./charts/kube-sentinel -run 'TestValuesSchemaIncludesProductionGatePolicy|TestValuesYamlIncludesProductionGatePolicyDefaults|TestValuesSchemaIncludesAPIContractPolicy|TestValuesYamlIncludesAPIContractPolicyDefaults'}"
 
 run_step "unit_test" "unit_test" "unit_tests_failed" "run: go test ./..." "$QUALITY_GATE_CMD_TEST"
 run_step "race_core" "race" "race_detection_failed" "run: go test -race ./internal/..." "$QUALITY_GATE_CMD_RACE"
 run_step "vet" "static_analysis" "go_vet_failed" "run: go vet ./..." "$QUALITY_GATE_CMD_VET"
 run_step "lint" "lint" "golangci_lint_failed" "run: golangci-lint run" "$QUALITY_GATE_CMD_LINT"
 run_step "crd_consistency" "crd_consistency" "crd_generation_drift" "run: bash ./scripts/check-crd-consistency.sh" "$QUALITY_GATE_CMD_CRD_CHECK"
+run_step "api_contract_sync" "api_crd_helm_sync" "api_contract_sync_mismatch" "run: go test ./charts/kube-sentinel" "$QUALITY_GATE_CMD_API_CONTRACT_SYNC"
 run_step "helm_sync" "api_crd_helm_sync" "helm_constraints_mismatch" "run: go test ./charts/kube-sentinel" "$QUALITY_GATE_CMD_HELM_SYNC"
 
 assert_slo_consistency "allow"
 assert_recovery_ready "allow"
+assert_api_contract_consistency
+assert_release_gate_contract_binding
 
 incident_level="${QUALITY_GATE_INCIDENT_LEVEL:-$(derive_incident_level "allow")}"
 assert_incident_level_mapping "allow" "$incident_level"
@@ -206,3 +297,4 @@ echo "QUALITY_GATE_RESULT=allow"
 echo "QUALITY_GATE_CATEGORY=quality_gate"
 echo "QUALITY_GATE_REASON=all_checks_passed"
 emit_slo_fields "allow"
+emit_api_contract_fields

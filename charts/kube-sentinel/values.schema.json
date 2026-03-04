@@ -118,6 +118,33 @@
           },
           "required": ["sampleWindowMinutes", "failureRatioBlockPercent"]
         },
+        "apiContractPolicy": {
+          "type": "object",
+          "properties": {
+            "compatibilityClass": {
+              "type": "string",
+              "enum": [
+                "backward-compatible",
+                "migration-required",
+                "version-bump-required"
+              ]
+            },
+            "migrationPlanRef": { "type": "string" },
+            "versionBumpWindow": { "type": "string" },
+            "riskLevel": {
+              "type": "string",
+              "enum": ["low", "medium", "high"]
+            },
+            "requireStatusFields": { "type": "boolean" }
+          },
+          "required": [
+            "compatibilityClass",
+            "migrationPlanRef",
+            "versionBumpWindow",
+            "riskLevel",
+            "requireStatusFields"
+          ]
+        },
         "maintenanceWindows": {
           "type": "array",
           "items": {
@@ -213,6 +240,7 @@
         "statefulSetPolicy",
         "deploymentPolicy",
         "productionGatePolicy",
+        "apiContractPolicy",
         "maintenanceWindows",
         "soakTimePolicies",
         "namespaceBudget",

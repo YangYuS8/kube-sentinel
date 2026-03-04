@@ -54,6 +54,30 @@ type HealthyRevisionSpec struct {
 	RequireNoCriticalAlerts bool `json:"requireNoCriticalAlerts"`
 }
 
+type APICompatibilityClass string
+
+const (
+	APICompatibilityBackwardCompatible APICompatibilityClass = "backward-compatible"
+	APICompatibilityMigrationRequired  APICompatibilityClass = "migration-required"
+	APICompatibilityVersionBumpNeeded  APICompatibilityClass = "version-bump-required"
+)
+
+type APIContractRiskLevel string
+
+const (
+	APIContractRiskLow    APIContractRiskLevel = "low"
+	APIContractRiskMedium APIContractRiskLevel = "medium"
+	APIContractRiskHigh   APIContractRiskLevel = "high"
+)
+
+type APIContractPolicySpec struct {
+	CompatibilityClass  APICompatibilityClass `json:"compatibilityClass,omitempty"`
+	MigrationPlanRef    string                `json:"migrationPlanRef,omitempty"`
+	VersionBumpWindow   string                `json:"versionBumpWindow,omitempty"`
+	RiskLevel           APIContractRiskLevel  `json:"riskLevel,omitempty"`
+	RequireStatusFields bool                  `json:"requireStatusFields,omitempty"`
+}
+
 type SoakTimePolicySpec struct {
 	Category    string `json:"category"`
 	Severity    string `json:"severity"`
@@ -111,6 +135,7 @@ type HealingRequestSpec struct {
 	StatefulSetPolicy        StatefulSetPolicySpec    `json:"statefulSetPolicy,omitempty"`
 	DeploymentPolicy         DeploymentPolicySpec     `json:"deploymentPolicy,omitempty"`
 	SnapshotPolicy           SnapshotPolicySpec       `json:"snapshotPolicy,omitempty"`
+	APIContractPolicy        APIContractPolicySpec    `json:"apiContractPolicy,omitempty"`
 	ProductionGatePolicy     ProductionGatePolicySpec `json:"productionGatePolicy,omitempty"`
 	MaintenanceWindows       []string                 `json:"maintenanceWindows,omitempty"`
 	IdempotencyWindowMinutes int                      `json:"idempotencyWindowMinutes,omitempty"`
@@ -306,6 +331,15 @@ func (r *HealingRequest) ApplyDefaults() {
 	if r.Spec.SnapshotPolicy.MaxSnapshotsPerWorkload == 0 {
 		r.Spec.SnapshotPolicy.MaxSnapshotsPerWorkload = 20
 	}
+	if r.Spec.APIContractPolicy.CompatibilityClass == "" {
+		r.Spec.APIContractPolicy.CompatibilityClass = APICompatibilityBackwardCompatible
+	}
+	if r.Spec.APIContractPolicy.RiskLevel == "" {
+		r.Spec.APIContractPolicy.RiskLevel = APIContractRiskLow
+	}
+	if !r.Spec.APIContractPolicy.RequireStatusFields {
+		r.Spec.APIContractPolicy.RequireStatusFields = true
+	}
 	if r.Spec.Workload.Kind == "StatefulSet" {
 		if len(r.Spec.StatefulSetPolicy.AllowedNamespaces) == 0 {
 			r.Spec.StatefulSetPolicy.AllowedNamespaces = []string{r.Spec.Workload.Namespace}
@@ -404,6 +438,22 @@ func (r *HealingRequest) Validate() error {
 	if r.Spec.SnapshotPolicy.MaxSnapshotsPerWorkload < 1 {
 		return fmt.Errorf("snapshotPolicy.maxSnapshotsPerWorkload must be >= 1")
 	}
+	if r.Spec.APIContractPolicy.CompatibilityClass != APICompatibilityBackwardCompatible &&
+		r.Spec.APIContractPolicy.CompatibilityClass != APICompatibilityMigrationRequired &&
+		r.Spec.APIContractPolicy.CompatibilityClass != APICompatibilityVersionBumpNeeded {
+		return fmt.Errorf("apiContractPolicy.compatibilityClass must be one of backward-compatible, migration-required, version-bump-required")
+	}
+	if r.Spec.APIContractPolicy.RiskLevel != APIContractRiskLow &&
+		r.Spec.APIContractPolicy.RiskLevel != APIContractRiskMedium &&
+		r.Spec.APIContractPolicy.RiskLevel != APIContractRiskHigh {
+		return fmt.Errorf("apiContractPolicy.riskLevel must be one of low, medium, high")
+	}
+	if r.Spec.APIContractPolicy.CompatibilityClass == APICompatibilityMigrationRequired && r.Spec.APIContractPolicy.MigrationPlanRef == "" {
+		return fmt.Errorf("apiContractPolicy.migrationPlanRef is required when compatibilityClass is migration-required")
+	}
+	if r.Spec.APIContractPolicy.CompatibilityClass == APICompatibilityVersionBumpNeeded && r.Spec.APIContractPolicy.VersionBumpWindow == "" {
+		return fmt.Errorf("apiContractPolicy.versionBumpWindow is required when compatibilityClass is version-bump-required")
+	}
 	if r.Spec.Workload.Kind == "StatefulSet" {
 		if len(r.Spec.StatefulSetPolicy.AllowedNamespaces) == 0 {
 			return fmt.Errorf("statefulSetPolicy.allowedNamespaces must not be empty for StatefulSet")
@@ -418,6 +468,36 @@ func (r *HealingRequest) Validate() error {
 		}
 		if policy.MinSamples < 1 {
 			return fmt.Errorf("soakTimePolicies.minSamples must be >= 1")
+		}
+	}
+	return nil
+}
+
+func (r *HealingRequest) ValidateAPIContractRequirements() error {
+	if err := r.Validate(); err != nil {
+		return err
+	}
+	if r.Spec.APIContractPolicy.RequireStatusFields {
+		if err := r.Status.ValidateContractSemantics(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (status HealingRequestStatus) ValidateContractSemantics() error {
+	if status.Phase == "" {
+		return fmt.Errorf("status.phase is required for api contract semantics")
+	}
+	if status.LastAction == "" {
+		return fmt.Errorf("status.lastAction is required for api contract semantics")
+	}
+	if status.NextRecommendation == "" {
+		return fmt.Errorf("status.nextRecommendation is required for api contract semantics")
+	}
+	if status.Phase == PhaseBlocked || status.Phase == PhaseL3 {
+		if status.BlockReasonCode == "" && status.LastError == "" {
+			return fmt.Errorf("status.failureReason is required for blocked/degraded semantics")
 		}
 	}
 	return nil

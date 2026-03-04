@@ -42,3 +42,38 @@ func TestValuesYamlIncludesProductionGatePolicyDefaults(t *testing.T) {
 		}
 	}
 }
+
+func TestValuesSchemaIncludesAPIContractPolicy(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("values.schema.json"))
+	if err != nil {
+		t.Fatalf("read schema failed: %v", err)
+	}
+	var schema map[string]interface{}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("unmarshal schema failed: %v", err)
+	}
+	properties := schema["properties"].(map[string]interface{})
+	healingRequest := properties["healingRequest"].(map[string]interface{})
+	healingProperties := healingRequest["properties"].(map[string]interface{})
+	apiContractPolicy, ok := healingProperties["apiContractPolicy"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("apiContractPolicy missing in healingRequest properties")
+	}
+	required := apiContractPolicy["required"].([]interface{})
+	if len(required) != 5 {
+		t.Fatalf("unexpected apiContractPolicy required fields: %#v", required)
+	}
+}
+
+func TestValuesYamlIncludesAPIContractPolicyDefaults(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("values.yaml"))
+	if err != nil {
+		t.Fatalf("read values yaml failed: %v", err)
+	}
+	content := string(raw)
+	for _, token := range []string{"apiContractPolicy:", "compatibilityClass: backward-compatible", "riskLevel: low", "requireStatusFields: true"} {
+		if !strings.Contains(content, token) {
+			t.Fatalf("values.yaml missing %s", token)
+		}
+	}
+}

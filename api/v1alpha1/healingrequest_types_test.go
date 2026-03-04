@@ -9,6 +9,7 @@ func baseRequest() *HealingRequest {
 func TestApplyDefaults(t *testing.T) {
 	r := baseRequest()
 	r.ApplyDefaults()
+	r.Status = HealingRequestStatus{Phase: PhaseCompleted, LastAction: "noop", NextRecommendation: "continue-observation"}
 	if r.Spec.RateLimit.MaxActions != 3 || r.Spec.RateLimit.WindowMinutes != 10 {
 		t.Fatalf("rate limit defaults not applied")
 	}
@@ -57,12 +58,22 @@ func TestApplyDefaults(t *testing.T) {
 	if r.Spec.ProductionGatePolicy.SampleWindowMinutes != 10 || r.Spec.ProductionGatePolicy.FailureRatioBlockPercent != 30 {
 		t.Fatalf("production gate policy defaults not applied")
 	}
+	if r.Spec.APIContractPolicy.CompatibilityClass != APICompatibilityBackwardCompatible {
+		t.Fatalf("api compatibility class default not applied")
+	}
+	if r.Spec.APIContractPolicy.RiskLevel != APIContractRiskLow {
+		t.Fatalf("api contract risk level default not applied")
+	}
+	if !r.Spec.APIContractPolicy.RequireStatusFields {
+		t.Fatalf("api contract status semantics default not applied")
+	}
 }
 
 func TestValidateAllowsStatefulSet(t *testing.T) {
 	r := baseRequest()
 	r.Spec.Workload.Kind = "StatefulSet"
 	r.ApplyDefaults()
+	r.Status = HealingRequestStatus{Phase: PhaseCompleted, LastAction: "noop", NextRecommendation: "continue-observation"}
 	if err := r.Validate(); err != nil {
 		t.Fatalf("expected statefulset to be allowed, got err: %v", err)
 	}
@@ -87,6 +98,7 @@ func TestValidateRejectsUnsupportedKind(t *testing.T) {
 	r := baseRequest()
 	r.Spec.Workload.Kind = "Job"
 	r.ApplyDefaults()
+	r.Status = HealingRequestStatus{Phase: PhaseCompleted, LastAction: "noop", NextRecommendation: "continue-observation"}
 	if err := r.Validate(); err == nil {
 		t.Fatalf("expected validation error for unsupported workload kind")
 	}
@@ -95,6 +107,7 @@ func TestValidateRejectsUnsupportedKind(t *testing.T) {
 func TestValidateBoundaries(t *testing.T) {
 	r := baseRequest()
 	r.ApplyDefaults()
+	r.Status = HealingRequestStatus{Phase: PhaseCompleted, LastAction: "noop", NextRecommendation: "continue-observation"}
 	r.Spec.BlastRadius.MaxPodPercentage = 101
 	if err := r.Validate(); err == nil {
 		t.Fatalf("expected boundary validation error")
@@ -125,6 +138,7 @@ func TestValidateStatefulSetPolicyBoundaries(t *testing.T) {
 	r := baseRequest()
 	r.Spec.Workload.Kind = "StatefulSet"
 	r.ApplyDefaults()
+	r.Status = HealingRequestStatus{Phase: PhaseCompleted, LastAction: "noop", NextRecommendation: "continue-observation"}
 	r.Spec.StatefulSetPolicy.FreezeWindowMinutes = 0
 	if err := r.Validate(); err == nil {
 		t.Fatalf("expected freeze window validation error")
@@ -154,6 +168,7 @@ func TestValidateStatefulSetPolicyBoundaries(t *testing.T) {
 func TestValidateSnapshotPolicyBoundaries(t *testing.T) {
 	r := baseRequest()
 	r.ApplyDefaults()
+	r.Status = HealingRequestStatus{Phase: PhaseCompleted, LastAction: "noop", NextRecommendation: "continue-observation"}
 	r.Spec.SnapshotPolicy.RetentionMinutes = 0
 	if err := r.Validate(); err == nil {
 		t.Fatalf("expected snapshot retention validation error")
@@ -173,6 +188,7 @@ func TestValidateSnapshotPolicyBoundaries(t *testing.T) {
 func TestValidateDeploymentPolicyBoundaries(t *testing.T) {
 	r := baseRequest()
 	r.ApplyDefaults()
+	r.Status = HealingRequestStatus{Phase: PhaseCompleted, LastAction: "noop", NextRecommendation: "continue-observation"}
 	r.Spec.DeploymentPolicy.L2CandidateWindowMinutes = 0
 	if err := r.Validate(); err == nil {
 		t.Fatalf("expected deployment l2 candidate window validation error")
@@ -211,5 +227,59 @@ func TestValidateDeploymentPolicyBoundaries(t *testing.T) {
 	r.Spec.ProductionGatePolicy.FailureRatioBlockPercent = 101
 	if err := r.Validate(); err == nil {
 		t.Fatalf("expected production gate failure ratio validation error")
+	}
+}
+
+func TestValidateAPICompatibilityPolicyBoundaries(t *testing.T) {
+	r := baseRequest()
+	r.ApplyDefaults()
+	r.Status = HealingRequestStatus{Phase: PhaseCompleted, LastAction: "noop", NextRecommendation: "continue-observation"}
+
+	r.Spec.APIContractPolicy.CompatibilityClass = APICompatibilityClass("invalid")
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected invalid compatibility class to fail")
+	}
+
+	r.Spec.APIContractPolicy.CompatibilityClass = APICompatibilityMigrationRequired
+	r.Spec.APIContractPolicy.MigrationPlanRef = ""
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected missing migration plan to fail")
+	}
+
+	r.Spec.APIContractPolicy.MigrationPlanRef = "runbook://migration"
+	r.Spec.APIContractPolicy.CompatibilityClass = APICompatibilityVersionBumpNeeded
+	r.Spec.APIContractPolicy.VersionBumpWindow = ""
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected missing version bump window to fail")
+	}
+
+	r.Spec.APIContractPolicy.VersionBumpWindow = "2026-03-04T20:00:00Z/2026-03-04T22:00:00Z"
+	r.Spec.APIContractPolicy.RiskLevel = APIContractRiskLevel("critical")
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected invalid risk level to fail")
+	}
+}
+
+func TestValidateStatusContractSemanticsBoundaries(t *testing.T) {
+	r := baseRequest()
+	r.ApplyDefaults()
+	r.Status = HealingRequestStatus{}
+	if err := r.ValidateAPIContractRequirements(); err == nil {
+		t.Fatalf("expected missing status semantics to fail")
+	}
+
+	r.Status = HealingRequestStatus{Phase: PhaseCompleted, LastAction: "noop", NextRecommendation: "continue-observation"}
+	if err := r.ValidateAPIContractRequirements(); err != nil {
+		t.Fatalf("expected completed semantics to pass: %v", err)
+	}
+
+	r.Status = HealingRequestStatus{Phase: PhaseBlocked, LastAction: "manual-intervention", NextRecommendation: "check migration", BlockReasonCode: "gate_blocked"}
+	if err := r.ValidateAPIContractRequirements(); err != nil {
+		t.Fatalf("expected blocked semantics with failure reason to pass: %v", err)
+	}
+
+	r.Status = HealingRequestStatus{Phase: PhaseL3, LastAction: "manual-intervention", NextRecommendation: "manual review"}
+	if err := r.ValidateAPIContractRequirements(); err == nil {
+		t.Fatalf("expected degraded semantics without failure reason to fail")
 	}
 }

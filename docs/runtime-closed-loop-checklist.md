@@ -13,6 +13,8 @@
 
 - 统一质量门禁输出可解析结论：`QUALITY_GATE_RESULT` / `QUALITY_GATE_CATEGORY` / `QUALITY_GATE_REASON`
 - 统一质量门禁输出 SLO 关联字段：`QUALITY_GATE_SLO_ACTION_LEVEL` / `QUALITY_GATE_SLO_BUDGET_STATUS` / `QUALITY_GATE_INCIDENT_LEVEL`
+- 统一质量门禁输出 API 契约证据：`QUALITY_GATE_API_COMPATIBILITY_CLASS` / `QUALITY_GATE_API_AFFECTED_FIELDS` / `QUALITY_GATE_API_MIGRATION_PLAN` / `QUALITY_GATE_API_RISK_LEVEL`
+- 统一质量门禁输出发布绑定字段：`QUALITY_GATE_RELEASE_DECISION` / `QUALITY_GATE_VERSION_BUMP_WINDOW`
 - 合法告警可创建/更新 `HealingRequest`
 - 非 Deployment 事件仅只读拒绝，不触发写操作
 - 无健康 Revision 时阶段进入 `L3`
@@ -36,3 +38,5 @@
 - 预提交与 CI 门禁语义不一致时必须阻断验收
 - 门禁语义与 SLO 治理语义不一致时必须阻断验收
 - 恢复条件未满足时即使检查项通过也必须阻断放量（`QUALITY_GATE_RECOVERY_READY=false`）
+- 兼容性分类非法、迁移路径缺失或高风险未审批时必须阻断放量
+- API/CRD/Helm 任一约束未同步时必须阻断 CI 与质量门禁

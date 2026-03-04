@@ -37,6 +37,19 @@ spec:
             type: object
           spec:
             properties:
+              apiContractPolicy:
+                properties:
+                  compatibilityClass:
+                    type: string
+                  migrationPlanRef:
+                    type: string
+                  requireStatusFields:
+                    type: boolean
+                  riskLevel:
+                    type: string
+                  versionBumpWindow:
+                    type: string
+                type: object
               blastRadius:
                 properties:
                   maxPodPercentage:

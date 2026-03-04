@@ -35,6 +35,12 @@ healingRequest:
   productionGatePolicy:
     sampleWindowMinutes: 10
     failureRatioBlockPercent: 30
+  apiContractPolicy:
+    compatibilityClass: backward-compatible
+    migrationPlanRef: ''
+    versionBumpWindow: ''
+    riskLevel: low
+    requireStatusFields: true
   maintenanceWindows: []
   idempotencyWindowMinutes: 5
   soakTimePolicies:

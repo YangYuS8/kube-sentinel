@@ -21,6 +21,10 @@
 16. 阈值调优必须具备审批人记录（例如 oncall 值班人）；无审批记录视为无效变更。
 17. 同一对象在观察窗口（`sampleWindowMinutes`）内禁止重复调优；需等待窗口结束后再提交。
 18. 阈值调优前必须保留上一个有效阈值快照，越线回退时恢复该快照。
+19. API 变更发布前必须声明兼容性分类：`backward-compatible` / `migration-required` / `version-bump-required`，且必须与门禁证据字段一致。
+20. 当兼容性分类为 `migration-required` 时，必须提供迁移路径（如 runbook/ref）；缺失时禁止放量。
+21. 当兼容性分类为 `version-bump-required` 时，必须提供版本切换窗口并完成值班审批；未审批时禁止放量。
+22. 当 API 契约风险等级为 `high` 时，必须在发布窗口中显式审批（`QUALITY_GATE_RELEASE_WINDOW_APPROVED=true`）后方可推进。
 
 ## 质量门禁失败分类（示例）
 
@@ -31,11 +35,21 @@
 
 当输出为 `QUALITY_GATE_RESULT=allow` 时，表示可进入下一发布检查环节。
 
+## API 兼容性迁移模板（最小）
+
+- 兼容性分类：`backward-compatible` / `migration-required` / `version-bump-required`
+- 受影响字段：`QUALITY_GATE_API_AFFECTED_FIELDS`
+- 迁移方案引用：`QUALITY_GATE_API_MIGRATION_PLAN`
+- 版本切换窗口：`QUALITY_GATE_VERSION_BUMP_WINDOW`
+- 风险等级：`QUALITY_GATE_API_RISK_LEVEL`
+- 发布判定：`QUALITY_GATE_RELEASE_DECISION`
+
 ## 验收矩阵（最小）
 
 - `allow`：`make quality-gate` 全部通过，允许推进发布步骤。
 - `block`：任一阻断检查失败（如 CRD 漂移），必须先修复再重试。
 - `degrade`：演练判定需保守路径，必须进入 `L3` / 人工介入流程后再评估恢复自动化。
+- API 契约阻断：`QUALITY_GATE_CATEGORY=api_contract` 或 `QUALITY_GATE_CATEGORY=runtime_production_gating` 时，必须先补齐迁移条件或发布审批再重试。
 
 ## SLO 阈值与响应分级
 
