@@ -23,6 +23,20 @@ classify_outcome() {
   echo "degrade"
 }
 
+assert_precommit_ci_consistency() {
+  local precommit_outcome="${PRECOMMIT_GATE_OUTCOME:-}"
+  local ci_outcome="${CI_GATE_OUTCOME:-}"
+  if [[ -z "$precommit_outcome" ]] || [[ -z "$ci_outcome" ]]; then
+    echo "INFO: 跳过预提交/CI 一致性断言（未同时提供 PRECOMMIT_GATE_OUTCOME 与 CI_GATE_OUTCOME）"
+    return 0
+  fi
+  if [[ "$precommit_outcome" != "$ci_outcome" ]]; then
+    echo "ASSERTION FAILED: 预提交与 CI 门禁语义不一致 (precommit=$precommit_outcome, ci=$ci_outcome)"
+    exit 1
+  fi
+  echo "ASSERTION OK: 预提交与 CI 门禁语义一致 ($precommit_outcome)"
+}
+
 echo "[1/4] 触发 Deployment 告警事件"
 kubectl -n "$NAMESPACE" port-forward svc/kube-sentinel 8090:8090 >/tmp/kube-sentinel-pf.log 2>&1 &
 PF_PID=$!
@@ -126,6 +140,19 @@ echo "ASSERTION OK: Deployment 分层阶段证据已输出"
 dep_reason=$(kubectl -n default get healingrequest hr-demo-app -o jsonpath='{.status.blockReasonCode}' 2>/dev/null || true)
 dep_outcome=$(classify_outcome "$dep_phase" "$dep_reason" "$dep_l2_result" "$dep_l2_decision")
 echo "INFO: hr-demo-app gateOutcome=$dep_outcome"
+assert_precommit_ci_consistency
+
+if [[ "$dep_outcome" == "block" ]]; then
+  echo "ASSERTION FAILED: quality gate=block，禁止继续发布推进"
+  exit 1
+fi
+if [[ "$dep_outcome" == "degrade" ]]; then
+  echo "INFO: quality gate=degrade，执行保守降级路径（应进入 L3/人工介入）"
+  if [[ "${dep_phase}" != "L3" ]]; then
+    echo "ASSERTION FAILED: degrade 路径必须进入 L3"
+    exit 1
+  fi
+fi
 
 echo "[3.4/4] 验证 allow/block/degrade 三类解析断言"
 fixture_allow=$(classify_outcome "Completed" "" "success" "")

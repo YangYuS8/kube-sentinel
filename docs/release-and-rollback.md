@@ -2,6 +2,7 @@
 
 ## 灰度启用策略
 
+0. 合并前必须执行统一交付门禁：`make quality-gate`。
 1. 首先在低风险命名空间启用 webhook 接入与对象级熔断。
 2. 校验运行参数为声明式配置驱动（幂等窗口、限频、爆炸半径、熔断阈值）。
 3. 执行主线A演练脚本，确认三项强断言通过。
@@ -16,6 +17,21 @@
 12. Phase 3 灰度期间重点观测：L2 成功率、L2 失败回退率、L2 降级率；任一连续窗口越线应关闭 L2。
 13. 启用持久快照时，必须配置 `snapshotPolicy.retentionMinutes`、`snapshotPolicy.restoreTimeoutSeconds`、`snapshotPolicy.maxSnapshotsPerWorkload` 并先在白名单命名空间灰度。
 14. 快照灰度期间重点观测：`kube_sentinel_snapshot_creates_total{result="failure"}`、`kube_sentinel_snapshot_restores_total{result="failure"}`、`kube_sentinel_snapshot_restore_duration_seconds`。
+
+## 质量门禁失败分类（示例）
+
+- `QUALITY_GATE_RESULT=block`
+- `QUALITY_GATE_CATEGORY=crd_consistency`
+- `QUALITY_GATE_REASON=crd_generation_drift`
+- `QUALITY_GATE_FIX_HINT=run: controller-gen ... && cp -r .tmp/crd/* config/crd/`
+
+当输出为 `QUALITY_GATE_RESULT=allow` 时，表示可进入下一发布检查环节。
+
+## 验收矩阵（最小）
+
+- `allow`：`make quality-gate` 全部通过，允许推进发布步骤。
+- `block`：任一阻断检查失败（如 CRD 漂移），必须先修复再重试。
+- `degrade`：演练判定需保守路径，必须进入 `L3` / 人工介入流程后再评估恢复自动化。
 
 ## 风险
 

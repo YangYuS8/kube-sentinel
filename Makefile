@@ -1,6 +1,6 @@
 GO ?= go
 
-.PHONY: test race vet fmt lint
+.PHONY: test race vet fmt lint quality-gate
 
 test:
 	$(GO) test ./...
@@ -17,3 +17,6 @@ fmt:
 
 lint:
 	golangci-lint run
+
+quality-gate:
+	bash ./scripts/quality-gate.sh

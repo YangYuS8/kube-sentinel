@@ -3,7 +3,7 @@ name: ci
 on:
   pull_request:
   push:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   verify:
@@ -23,17 +23,5 @@ jobs:
           gofmt -w $(find . -name '*.go' -not -path './vendor/*')
           goimports -w $(find . -name '*.go' -not -path './vendor/*')
           git diff --exit-code
-      - name: Vet
-        run: go vet ./...
-      - name: Lint
-        run: golangci-lint run
-      - name: Unit tests
-        run: go test ./...
-      - name: Race tests
-        run: go test -race ./internal/...
-      - name: CRD generation consistency
-        run: |
-          mkdir -p .tmp
-          controller-gen crd paths=./api/... output:crd:artifacts:config=.tmp
-          cp -r .tmp/* config/crd/ || true
-          git diff --exit-code
+      - name: Quality gate
+        run: make quality-gate
