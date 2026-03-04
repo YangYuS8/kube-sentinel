@@ -106,6 +106,18 @@
             "blockRateMaxPercent"
           ]
         },
+        "productionGatePolicy": {
+          "type": "object",
+          "properties": {
+            "sampleWindowMinutes": { "type": "integer", "minimum": 1 },
+            "failureRatioBlockPercent": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          "required": ["sampleWindowMinutes", "failureRatioBlockPercent"]
+        },
         "maintenanceWindows": {
           "type": "array",
           "items": {
@@ -200,6 +212,7 @@
         "snapshotPolicy",
         "statefulSetPolicy",
         "deploymentPolicy",
+        "productionGatePolicy",
         "maintenanceWindows",
         "soakTimePolicies",
         "namespaceBudget",

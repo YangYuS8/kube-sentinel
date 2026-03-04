@@ -53,6 +53,42 @@ type SnapshotOptions struct {
 	MaxSnapshotsCount int
 }
 
+type RecoveryGateImpact struct {
+	RecoveryResult             string
+	GateEffect                 string
+	ReasonCode                 string
+	Recommendation             string
+	RequiresManualIntervention bool
+}
+
+func BuildRecoveryGateImpact(rollbackErr error, restoreErr error) RecoveryGateImpact {
+	if rollbackErr == nil {
+		return RecoveryGateImpact{
+			RecoveryResult:             "not-required",
+			GateEffect:                 "allow",
+			ReasonCode:                 "none",
+			Recommendation:             "continue observing rollout stability",
+			RequiresManualIntervention: false,
+		}
+	}
+	if restoreErr == nil {
+		return RecoveryGateImpact{
+			RecoveryResult:             "snapshot-restored",
+			GateEffect:                 "block",
+			ReasonCode:                 "rollback_failed_snapshot_restored",
+			Recommendation:             "hold write actions, inspect rollback cause, and request manual approval before retry",
+			RequiresManualIntervention: true,
+		}
+	}
+	return RecoveryGateImpact{
+		RecoveryResult:             "snapshot-restore-failed",
+		GateEffect:                 "block",
+		ReasonCode:                 "rollback_failed_restore_failed",
+		Recommendation:             "escalate immediately and keep conservative read-only mode until snapshot recovery is fixed",
+		RequiresManualIntervention: true,
+	}
+}
+
 type Snapshotter interface {
 	Create(ctx context.Context, namespace, name string, options SnapshotOptions) (Snapshot, error)
 	List(ctx context.Context, namespace, name string) ([]Snapshot, error)

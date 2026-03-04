@@ -34,6 +34,8 @@ type Metrics struct {
 	DeploymentL2Fallbacks      uint64
 	DeploymentL2Degrades       uint64
 	DeploymentStageBlocks      uint64
+	ProductionGateReports      uint64
+	GateReportMissingFields    uint64
 }
 
 var (
@@ -125,6 +127,14 @@ var (
 		Name: "kube_sentinel_deployment_stage_blocks_total",
 		Help: "Total number of Deployment stage blocks by reason.",
 	}, []string{"reason"})
+	productionGateReportsCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "kube_sentinel_production_gate_reports_total",
+		Help: "Total number of emitted production gate reports.",
+	})
+	productionGateReportMissingFieldsCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "kube_sentinel_production_gate_report_missing_fields_total",
+		Help: "Total number of production gate reports missing required fields.",
+	})
 )
 
 func registerPrometheusMetrics() {
@@ -151,6 +161,8 @@ func registerPrometheusMetrics() {
 			deploymentL1ResultCounter,
 			deploymentL2ResultCounter,
 			deploymentStageBlocksCounter,
+			productionGateReportsCounter,
+			productionGateReportMissingFieldsCounter,
 		)
 	})
 }
@@ -339,6 +351,16 @@ func (m *Metrics) IncDeploymentStageBlock(reason string) {
 	}
 	atomic.AddUint64(&m.DeploymentStageBlocks, 1)
 	deploymentStageBlocksCounter.WithLabelValues(reason).Inc()
+}
+
+func (m *Metrics) IncProductionGateReport(complete bool) {
+	registerPrometheusMetrics()
+	atomic.AddUint64(&m.ProductionGateReports, 1)
+	productionGateReportsCounter.Inc()
+	if !complete {
+		atomic.AddUint64(&m.GateReportMissingFields, 1)
+		productionGateReportMissingFieldsCounter.Inc()
+	}
 }
 
 func (m *Metrics) DeploymentTieredRates() (l1SuccessRate, l2SuccessRate, l3DegradeRate, blockRate float64) {

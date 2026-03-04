@@ -3,6 +3,7 @@ package healing
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -172,6 +173,12 @@ func TestOrchestratorRollbackFailureRestore(t *testing.T) {
 	if err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected rollback error")
 	}
+	if req.Status.BlockReasonCode != "rollback_failed_snapshot_restored" {
+		t.Fatalf("expected recovery reason code, got %s", req.Status.BlockReasonCode)
+	}
+	if req.Status.SnapshotFailureReason == "" {
+		t.Fatalf("expected snapshot failure reason for rollback failure")
+	}
 }
 
 func TestOrchestratorCorrelationAndEvent(t *testing.T) {
@@ -330,6 +337,9 @@ func TestOrchestratorDeploymentL1FailureEscalatesToL2Success(t *testing.T) {
 	if req.Status.DeploymentL2Decision != "rollback-succeeded" {
 		t.Fatalf("expected deployment l2 rollback decision")
 	}
+	if !strings.Contains(req.Status.LastGateDecision, "deployment_l2_rollback_succeeded") {
+		t.Fatalf("expected stage-gate evidence for l2 success, got %s", req.Status.LastGateDecision)
+	}
 }
 
 func TestOrchestratorDeploymentL2DegradeWhenNoCandidate(t *testing.T) {
@@ -349,6 +359,34 @@ func TestOrchestratorDeploymentL2DegradeWhenNoCandidate(t *testing.T) {
 	}
 	if req.Status.Phase != ksv1alpha1.PhaseL3 || req.Status.DeploymentL2Result != "degraded" {
 		t.Fatalf("expected deployment l3 degraded when no healthy candidate in window")
+	}
+	if !strings.Contains(req.Status.LastGateDecision, "deployment_l2_no_candidate") {
+		t.Fatalf("expected stage-gate evidence for no candidate, got %s", req.Status.LastGateDecision)
+	}
+}
+
+func TestOrchestratorDeploymentRollbackFailureRestoreFailureEvidence(t *testing.T) {
+	req := newReq()
+	o := &Orchestrator{
+		Adapter: fakeAdapter{
+			supports:            true,
+			deploymentActionErr: errors.New("l1 failed"),
+			revisions:           []RevisionRecord{{Revision: "rev-ok", UnixTime: 10, Healthy: true}},
+			rollbackErr:         errors.New("rollback failed"),
+			affectedPods:        1,
+			clusterPods:         100,
+		},
+		Snapshotter: &fakeSnapshotter{restoreErr: errors.New("restore failed")},
+		Now:         func() time.Time { return time.Unix(1200, 0) },
+	}
+	if err := o.Process(context.Background(), req); err == nil {
+		t.Fatalf("expected rollback failure error")
+	}
+	if req.Status.BlockReasonCode != "rollback_failed_restore_failed" {
+		t.Fatalf("expected restore-failed reason code, got %s", req.Status.BlockReasonCode)
+	}
+	if !strings.Contains(req.Status.LastGateDecision, "recovery=snapshot-restore-failed") {
+		t.Fatalf("expected recovery evidence in gate decision, got %s", req.Status.LastGateDecision)
 	}
 }
 
@@ -370,6 +408,32 @@ func TestOrchestratorDeploymentL2IdempotencyBlocked(t *testing.T) {
 	}
 	if req.Status.BlockReasonCode != "deployment_l2_idempotency_window" {
 		t.Fatalf("expected deployment l2 idempotency block reason")
+	}
+}
+
+func TestOrchestratorDeploymentL2FailureRatioBlocked(t *testing.T) {
+	req := newReq()
+	req.Spec.DeploymentPolicy.L2MaxDegradeRatePercent = 30
+	now := time.Unix(3500, 0)
+	o := &Orchestrator{
+		Adapter: fakeAdapter{
+			supports:            true,
+			deploymentActionErr: errors.New("l1 failed"),
+			revisions:           []RevisionRecord{{Revision: "rev-ok", UnixTime: now.Unix() - 10, Healthy: true}},
+		},
+		Snapshotter: &MemorySnapshotter{},
+		Metrics: &observability.Metrics{
+			DeploymentL2Fallbacks: 4,
+			DeploymentL2Degrades:  1,
+			DeploymentL2Successes: 5,
+		},
+		Now: func() time.Time { return now },
+	}
+	if err := o.Process(context.Background(), req); err == nil {
+		t.Fatalf("expected deployment l2 failure ratio gate to block")
+	}
+	if req.Status.BlockReasonCode != "deployment_l2_failure_ratio_blocked" {
+		t.Fatalf("expected deployment_l2_failure_ratio_blocked, got %s", req.Status.BlockReasonCode)
 	}
 }
 
@@ -488,6 +552,13 @@ func TestOrchestratorShadowActionEventAuditConsistency(t *testing.T) {
 	}
 	if len(audits.Events) == 0 || audits.Events[len(audits.Events)-1].Result != "blocked" {
 		t.Fatalf("expected blocked audit event")
+	}
+	latestAudit := audits.Events[len(audits.Events)-1]
+	if latestAudit.GateResult == "" || latestAudit.RecoveryCondition == "" || latestAudit.Recommendation == "" {
+		t.Fatalf("expected complete production gate report fields in audit")
+	}
+	if !latestAudit.EvidenceComplete {
+		t.Fatalf("expected audit evidence completeness to be true")
 	}
 }
 

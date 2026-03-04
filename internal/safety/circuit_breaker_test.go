@@ -34,3 +34,27 @@ func TestDomainBreakerPriority(t *testing.T) {
 		t.Fatalf("expected domain breaker evidence in status")
 	}
 }
+
+func TestResolveGateArbitrationPriority(t *testing.T) {
+	result := ResolveGateArbitration(GateArbitrationInput{
+		NamespaceBudgetBlocked: true,
+		CircuitBreakerOpen:     true,
+		ReleaseGateBlocked:     true,
+	})
+	if !result.Blocked || result.ReasonCode != "namespace_budget_blocked" {
+		t.Fatalf("expected namespace budget to win arbitration")
+	}
+
+	result = ResolveGateArbitration(GateArbitrationInput{
+		CircuitBreakerOpen: true,
+		ReleaseGateBlocked: true,
+	})
+	if !result.Blocked || result.ReasonCode != "circuit_breaker_open" {
+		t.Fatalf("expected circuit breaker to win arbitration")
+	}
+
+	result = ResolveGateArbitration(GateArbitrationInput{ReleaseGateBlocked: true})
+	if !result.Blocked || result.ReasonCode != "release_gate_blocked" {
+		t.Fatalf("expected release gate to block when alone")
+	}
+}

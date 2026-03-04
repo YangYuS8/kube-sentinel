@@ -5,6 +5,52 @@ import (
 	"time"
 )
 
+type GateArbitrationInput struct {
+	NamespaceBudgetBlocked bool
+	CircuitBreakerOpen     bool
+	ReleaseGateBlocked     bool
+}
+
+type GateArbitrationResult struct {
+	Blocked    bool
+	ReasonCode string
+	Source     string
+	Action     string
+}
+
+func ResolveGateArbitration(input GateArbitrationInput) GateArbitrationResult {
+	if input.NamespaceBudgetBlocked {
+		return GateArbitrationResult{
+			Blocked:    true,
+			ReasonCode: "namespace_budget_blocked",
+			Source:     "namespace_budget",
+			Action:     "readonly-block",
+		}
+	}
+	if input.CircuitBreakerOpen {
+		return GateArbitrationResult{
+			Blocked:    true,
+			ReasonCode: "circuit_breaker_open",
+			Source:     "circuit_breaker",
+			Action:     "readonly-block",
+		}
+	}
+	if input.ReleaseGateBlocked {
+		return GateArbitrationResult{
+			Blocked:    true,
+			ReasonCode: "release_gate_blocked",
+			Source:     "release_gate",
+			Action:     "degrade",
+		}
+	}
+	return GateArbitrationResult{
+		Blocked:    false,
+		ReasonCode: "none",
+		Source:     "allow",
+		Action:     "allow",
+	}
+}
+
 type breakerState struct {
 	failures  int
 	openUntil time.Time

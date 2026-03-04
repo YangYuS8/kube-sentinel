@@ -54,6 +54,9 @@ func TestApplyDefaults(t *testing.T) {
 	if r.Spec.DeploymentPolicy.L3DegradeRateMaxPercent != 40 || r.Spec.DeploymentPolicy.BlockRateMaxPercent != 30 {
 		t.Fatalf("deployment gate rate defaults not applied")
 	}
+	if r.Spec.ProductionGatePolicy.SampleWindowMinutes != 10 || r.Spec.ProductionGatePolicy.FailureRatioBlockPercent != 30 {
+		t.Fatalf("production gate policy defaults not applied")
+	}
 }
 
 func TestValidateAllowsStatefulSet(t *testing.T) {
@@ -198,5 +201,15 @@ func TestValidateDeploymentPolicyBoundaries(t *testing.T) {
 	r.Spec.DeploymentPolicy.BlockRateMaxPercent = 101
 	if err := r.Validate(); err == nil {
 		t.Fatalf("expected deployment block rate validation error")
+	}
+	r.Spec.DeploymentPolicy.BlockRateMaxPercent = 30
+	r.Spec.ProductionGatePolicy.SampleWindowMinutes = 0
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected production gate sample window validation error")
+	}
+	r.Spec.ProductionGatePolicy.SampleWindowMinutes = 10
+	r.Spec.ProductionGatePolicy.FailureRatioBlockPercent = 101
+	if err := r.Validate(); err == nil {
+		t.Fatalf("expected production gate failure ratio validation error")
 	}
 }

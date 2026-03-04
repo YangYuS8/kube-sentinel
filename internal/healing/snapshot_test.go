@@ -2,6 +2,7 @@ package healing
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -114,5 +115,22 @@ func TestKubernetesSnapshotterIdempotencyAndCapacity(t *testing.T) {
 		MaxSnapshotsCount: 1,
 	}); err == nil {
 		t.Fatalf("expected capacity block")
+	}
+}
+
+func TestBuildRecoveryGateImpact(t *testing.T) {
+	allow := BuildRecoveryGateImpact(nil, nil)
+	if allow.GateEffect != "allow" || allow.RequiresManualIntervention {
+		t.Fatalf("expected allow when rollback not failed")
+	}
+
+	restored := BuildRecoveryGateImpact(errors.New("rollback failed"), nil)
+	if restored.GateEffect != "block" || restored.ReasonCode != "rollback_failed_snapshot_restored" {
+		t.Fatalf("expected block with snapshot restored reason")
+	}
+
+	failed := BuildRecoveryGateImpact(errors.New("rollback failed"), errors.New("restore failed"))
+	if failed.GateEffect != "block" || failed.ReasonCode != "rollback_failed_restore_failed" {
+		t.Fatalf("expected block with restore failure reason")
 	}
 }

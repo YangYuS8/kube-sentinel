@@ -32,6 +32,9 @@ healingRequest:
     l2SuccessRateMinPercent: 50
     l3DegradeRateMaxPercent: 40
     blockRateMaxPercent: 30
+  productionGatePolicy:
+    sampleWindowMinutes: 10
+    failureRatioBlockPercent: 30
   maintenanceWindows: []
   idempotencyWindowMinutes: 5
   soakTimePolicies:

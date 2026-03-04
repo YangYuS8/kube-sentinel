@@ -23,18 +23,41 @@ type GateDecision struct {
 	Reason   string
 }
 
+type GateValidationResult struct {
+	Valid      bool
+	ReasonCode string
+	Reason     string
+}
+
+func ValidateGateInput(input GateInput) GateValidationResult {
+	if input.MaxActions < 1 {
+		return GateValidationResult{Valid: false, ReasonCode: "invalid_rate_limit", Reason: "max actions must be >= 1"}
+	}
+	if input.MaxPodPercentage < 1 || input.MaxPodPercentage > 100 {
+		return GateValidationResult{Valid: false, ReasonCode: "invalid_blast_radius", Reason: "max pod percentage must be between 1 and 100"}
+	}
+	if input.ClusterPods < 0 || input.AffectedPods < 0 {
+		return GateValidationResult{Valid: false, ReasonCode: "invalid_workload_counts", Reason: "pod counts must be >= 0"}
+	}
+	if input.ClusterPods > 0 && input.AffectedPods > input.ClusterPods {
+		return GateValidationResult{Valid: false, ReasonCode: "invalid_blast_radius_counts", Reason: "affected pods cannot exceed cluster pods"}
+	}
+	return GateValidationResult{Valid: true, ReasonCode: "ok"}
+}
+
 func Evaluate(input GateInput) GateDecision {
+	validation := ValidateGateInput(input)
+	if !validation.Valid {
+		if validation.ReasonCode == "invalid_rate_limit" {
+			return GateDecision{Allow: false, ReadOnly: true, Reason: "invalid rate limit config"}
+		}
+		return GateDecision{Allow: false, ReadOnly: true, Reason: "invalid blast radius config"}
+	}
 	if inMaintenanceWindow(input.Now, input.MaintenanceWindows) {
 		return GateDecision{Allow: false, ReadOnly: true, Reason: "maintenance window"}
 	}
-	if input.MaxActions < 1 {
-		return GateDecision{Allow: false, ReadOnly: true, Reason: "invalid rate limit config"}
-	}
 	if input.ActionsInWindow >= input.MaxActions {
 		return GateDecision{Allow: false, ReadOnly: true, Reason: "rate limit exceeded"}
-	}
-	if input.MaxPodPercentage < 1 || input.MaxPodPercentage > 100 {
-		return GateDecision{Allow: false, ReadOnly: true, Reason: "invalid blast radius config"}
 	}
 	if input.ClusterPods > 0 {
 		pct := (input.AffectedPods * 100) / input.ClusterPods

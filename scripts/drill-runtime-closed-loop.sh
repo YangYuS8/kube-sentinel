@@ -3,6 +3,26 @@ set -euo pipefail
 
 NAMESPACE="${1:-default}"
 
+classify_outcome() {
+  local phase="${1:-}"
+  local block_reason="${2:-}"
+  local l2_result="${3:-}"
+  local l2_decision="${4:-}"
+  if [[ -n "$block_reason" ]] || [[ "$phase" == "Blocked" ]]; then
+    echo "block"
+    return
+  fi
+  if [[ "$phase" == "L3" ]] || [[ "$l2_result" == "degraded" ]] || [[ "$l2_decision" == *"degrade"* ]]; then
+    echo "degrade"
+    return
+  fi
+  if [[ "$phase" == "Completed" ]] || [[ "$l2_result" == "success" ]] || [[ "$l2_result" == "skipped" ]]; then
+    echo "allow"
+    return
+  fi
+  echo "degrade"
+}
+
 echo "[1/4] 触发 Deployment 告警事件"
 kubectl -n "$NAMESPACE" port-forward svc/kube-sentinel 8090:8090 >/tmp/kube-sentinel-pf.log 2>&1 &
 PF_PID=$!
@@ -61,6 +81,8 @@ if [[ "$db_reason" != "statefulset_readonly" ]] || [[ "$db_cap" != "read-only" ]
   exit 1
 fi
 echo "ASSERTION OK: StatefulSet 只读评估生效"
+db_outcome=$(classify_outcome "$db_phase" "$db_reason" "" "")
+echo "INFO: hr-db gateOutcome=$db_outcome"
 
 echo "[3.1/4] 打开 StatefulSet Phase 2 受控动作并触发审批"
 kubectl -n default patch healingrequest hr-db --type merge -p '{"metadata":{"annotations":{"kube-sentinel.io/statefulset-approved":"true"}},"spec":{"statefulSetPolicy":{"enabled":true,"readOnlyOnly":false,"controlledActionsEnabled":true,"allowedNamespaces":["default"],"approvalAnnotation":"kube-sentinel.io/statefulset-approved","requireEvidence":false,"freezeWindowMinutes":10}}}' >/dev/null
@@ -100,6 +122,24 @@ if [[ -z "${dep_phase}" ]]; then
   exit 1
 fi
 echo "ASSERTION OK: Deployment 分层阶段证据已输出"
+
+dep_reason=$(kubectl -n default get healingrequest hr-demo-app -o jsonpath='{.status.blockReasonCode}' 2>/dev/null || true)
+dep_outcome=$(classify_outcome "$dep_phase" "$dep_reason" "$dep_l2_result" "$dep_l2_decision")
+echo "INFO: hr-demo-app gateOutcome=$dep_outcome"
+
+echo "[3.4/4] 验证 allow/block/degrade 三类解析断言"
+fixture_allow=$(classify_outcome "Completed" "" "success" "")
+fixture_block=$(classify_outcome "Blocked" "statefulset_readonly" "" "")
+fixture_degrade=$(classify_outcome "L3" "" "degraded" "no-healthy-candidate")
+if [[ "$fixture_allow" != "allow" ]] || [[ "$fixture_block" != "block" ]] || [[ "$fixture_degrade" != "degrade" ]]; then
+  echo "ASSERTION FAILED: gate outcome 解析逻辑不符合 allow/block/degrade 语义"
+  exit 1
+fi
+if [[ "$db_outcome" != "block" ]]; then
+  echo "ASSERTION FAILED: 运行态 StatefulSet 路径必须命中 block"
+  exit 1
+fi
+echo "ASSERTION OK: allow/block/degrade 解析与运行态断言通过"
 
 phase=$(kubectl -n default get healingrequest hr-demo-app -o jsonpath='{.status.phase}')
 echo "INFO: 当前阶段=$phase（若候选为空应为L3）"

@@ -94,6 +94,11 @@ type DeploymentPolicySpec struct {
 	BlockRateMaxPercent      int `json:"blockRateMaxPercent,omitempty"`
 }
 
+type ProductionGatePolicySpec struct {
+	SampleWindowMinutes      int `json:"sampleWindowMinutes,omitempty"`
+	FailureRatioBlockPercent int `json:"failureRatioBlockPercent,omitempty"`
+}
+
 type SnapshotPolicySpec struct {
 	Enabled                 bool `json:"enabled,omitempty"`
 	RetentionMinutes        int  `json:"retentionMinutes,omitempty"`
@@ -102,19 +107,20 @@ type SnapshotPolicySpec struct {
 }
 
 type HealingRequestSpec struct {
-	Workload                 WorkloadRef           `json:"workload"`
-	StatefulSetPolicy        StatefulSetPolicySpec `json:"statefulSetPolicy,omitempty"`
-	DeploymentPolicy         DeploymentPolicySpec  `json:"deploymentPolicy,omitempty"`
-	SnapshotPolicy           SnapshotPolicySpec    `json:"snapshotPolicy,omitempty"`
-	MaintenanceWindows       []string              `json:"maintenanceWindows,omitempty"`
-	IdempotencyWindowMinutes int                   `json:"idempotencyWindowMinutes,omitempty"`
-	RateLimit                RateLimitSpec         `json:"rateLimit"`
-	BlastRadius              BlastRadiusSpec       `json:"blastRadius"`
-	CircuitBreaker           CircuitBreakerSpec    `json:"circuitBreaker"`
-	HealthyRevision          HealthyRevisionSpec   `json:"healthyRevision"`
-	SoakTimePolicies         []SoakTimePolicySpec  `json:"soakTimePolicies,omitempty"`
-	NamespaceBudget          NamespaceBudgetSpec   `json:"namespaceBudget"`
-	EmergencyTry             EmergencyTrySpec      `json:"emergencyTry"`
+	Workload                 WorkloadRef              `json:"workload"`
+	StatefulSetPolicy        StatefulSetPolicySpec    `json:"statefulSetPolicy,omitempty"`
+	DeploymentPolicy         DeploymentPolicySpec     `json:"deploymentPolicy,omitempty"`
+	SnapshotPolicy           SnapshotPolicySpec       `json:"snapshotPolicy,omitempty"`
+	ProductionGatePolicy     ProductionGatePolicySpec `json:"productionGatePolicy,omitempty"`
+	MaintenanceWindows       []string                 `json:"maintenanceWindows,omitempty"`
+	IdempotencyWindowMinutes int                      `json:"idempotencyWindowMinutes,omitempty"`
+	RateLimit                RateLimitSpec            `json:"rateLimit"`
+	BlastRadius              BlastRadiusSpec          `json:"blastRadius"`
+	CircuitBreaker           CircuitBreakerSpec       `json:"circuitBreaker"`
+	HealthyRevision          HealthyRevisionSpec      `json:"healthyRevision"`
+	SoakTimePolicies         []SoakTimePolicySpec     `json:"soakTimePolicies,omitempty"`
+	NamespaceBudget          NamespaceBudgetSpec      `json:"namespaceBudget"`
+	EmergencyTry             EmergencyTrySpec         `json:"emergencyTry"`
 }
 
 type CircuitBreakerStatus struct {
@@ -148,6 +154,9 @@ type HealingRequestStatus struct {
 	LastAction               string               `json:"lastAction,omitempty"`
 	LastError                string               `json:"lastError,omitempty"`
 	LastGateDecision         string               `json:"lastGateDecision,omitempty"`
+	GateOutcome              string               `json:"gateOutcome,omitempty"`
+	GateReasonCode           string               `json:"gateReasonCode,omitempty"`
+	GateEvidenceComplete     bool                 `json:"gateEvidenceComplete,omitempty"`
 	LastEvidenceStatus       string               `json:"lastEvidenceStatus,omitempty"`
 	LastEventReason          string               `json:"lastEventReason,omitempty"`
 	PendingSince             string               `json:"pendingSince,omitempty"`
@@ -279,6 +288,12 @@ func (r *HealingRequest) ApplyDefaults() {
 	if r.Spec.DeploymentPolicy.BlockRateMaxPercent == 0 {
 		r.Spec.DeploymentPolicy.BlockRateMaxPercent = 30
 	}
+	if r.Spec.ProductionGatePolicy.SampleWindowMinutes == 0 {
+		r.Spec.ProductionGatePolicy.SampleWindowMinutes = 10
+	}
+	if r.Spec.ProductionGatePolicy.FailureRatioBlockPercent == 0 {
+		r.Spec.ProductionGatePolicy.FailureRatioBlockPercent = 30
+	}
 	if !r.Spec.SnapshotPolicy.Enabled {
 		r.Spec.SnapshotPolicy.Enabled = true
 	}
@@ -373,6 +388,12 @@ func (r *HealingRequest) Validate() error {
 	}
 	if r.Spec.DeploymentPolicy.BlockRateMaxPercent < 1 || r.Spec.DeploymentPolicy.BlockRateMaxPercent > 100 {
 		return fmt.Errorf("deploymentPolicy.blockRateMaxPercent must be between 1 and 100")
+	}
+	if r.Spec.ProductionGatePolicy.SampleWindowMinutes < 1 {
+		return fmt.Errorf("productionGatePolicy.sampleWindowMinutes must be >= 1")
+	}
+	if r.Spec.ProductionGatePolicy.FailureRatioBlockPercent < 1 || r.Spec.ProductionGatePolicy.FailureRatioBlockPercent > 100 {
+		return fmt.Errorf("productionGatePolicy.failureRatioBlockPercent must be between 1 and 100")
 	}
 	if r.Spec.SnapshotPolicy.RetentionMinutes < 1 {
 		return fmt.Errorf("snapshotPolicy.retentionMinutes must be >= 1")

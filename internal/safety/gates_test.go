@@ -40,3 +40,20 @@ func TestEvaluateInvalidConfig(t *testing.T) {
 		t.Fatalf("expected invalid rate limit config")
 	}
 }
+
+func TestValidateGateInputBoundaries(t *testing.T) {
+	invalidCounts := ValidateGateInput(GateInput{MaxActions: 3, MaxPodPercentage: 10, AffectedPods: 11, ClusterPods: 10})
+	if invalidCounts.Valid || invalidCounts.ReasonCode != "invalid_blast_radius_counts" {
+		t.Fatalf("expected invalid blast radius counts reason, got %+v", invalidCounts)
+	}
+
+	invalidBlastRadius := ValidateGateInput(GateInput{MaxActions: 3, MaxPodPercentage: 0})
+	if invalidBlastRadius.Valid || invalidBlastRadius.ReasonCode != "invalid_blast_radius" {
+		t.Fatalf("expected invalid blast radius reason")
+	}
+
+	invalidRate := ValidateGateInput(GateInput{MaxActions: 0, MaxPodPercentage: 10})
+	if invalidRate.Valid || invalidRate.ReasonCode != "invalid_rate_limit" {
+		t.Fatalf("expected invalid rate limit reason")
+	}
+}
