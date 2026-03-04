@@ -145,3 +145,31 @@
 - 关注四个趋势指标：门禁通过率、阻断率、恢复耗时、演练覆盖率。
 - 空样本窗口应输出 0 值并保留窗口边界，不得输出非法数值。
 - 异常输入（如负恢复耗时）必须失败并阻断统计写入。
+
+## 变更拆分治理门禁（最小）
+
+- 拆分触发阈值：`capability >= 3` 或 `增量需求条目 > 10` 必须拆分。
+- 风险域混合约束：`blocking` 与 `operational` 同时出现时，默认阻断；仅在提供例外审批后放行。
+- 归档前自检必填：`scopeComplexity`、`riskCoupling`、`reviewability`、`rollbackImpact`。
+- 例外审批最小字段：`approver`、`reason`、`timestamp`、`traceKey`。
+
+## 变更拆分治理使用方式（最小）
+
+- 启用门禁：`CHANGE_SPLIT_GOVERNANCE_ENABLED=true`。
+- 输入规模：`CHANGE_SPLIT_CAPABILITY_COUNT`、`CHANGE_SPLIT_INCREMENT_ITEMS`。
+- 声明拆分计划：`CHANGE_SPLIT_HAS_SPLIT_PLAN=true` 且 `CHANGE_SPLIT_PLAN_REF=<change-a,change-b>`。
+- 归档阶段检查：`CHANGE_SPLIT_STAGE=archive` 并提供四项自检字段。
+- 幂等提交：`CHANGE_SPLIT_IDEMPOTENCY_FILE` + `CHANGE_SPLIT_SUBMISSION_KEY`。
+
+## 变更拆分治理失败处理（最小）
+
+- `split_required_missing_plan`：补齐拆分计划或提交例外审批。
+- `mixed_risk_domains_without_exception`：按风险域拆分或补齐审批。
+- `exception_approval_fields_missing`：补齐审批人、原因、时间戳与关联键。
+- `pre_archive_checklist_incomplete`：补齐四项自检后再执行归档。
+
+## 变更拆分治理调优计划（最小）
+
+- 每两周回顾一次阈值命中率与误报率；必要时调整阈值。
+- 当“拆分后评审时长”连续两个周期无改善时，复核风险域分类标准。
+- 例外审批占比超过 20% 时，优先优化拆分模板而非扩大例外范围。

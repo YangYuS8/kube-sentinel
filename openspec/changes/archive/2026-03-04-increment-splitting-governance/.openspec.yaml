@@ -1,0 +1,19 @@
+schema: spec-driven
+created: 2026-03-04
+metadata:
+	changeSplittingGovernance:
+		computableInputs:
+			capabilityCount: proposal.capabilities.total
+			incrementRequirementItems: specs.requirements.total
+			riskDomains: proposal.riskDomains
+			splitPlanRef: proposal.splitPlanRef
+			exceptionApproval:
+				approver: proposal.exception.approver
+				reason: proposal.exception.reason
+				timestamp: proposal.exception.timestamp
+				traceKey: proposal.exception.traceKey
+			preArchiveChecklist:
+				scopeComplexity: archiveChecklist.scopeComplexity
+				riskCoupling: archiveChecklist.riskCoupling
+				reviewability: archiveChecklist.reviewability
+				rollbackImpact: archiveChecklist.rollbackImpact

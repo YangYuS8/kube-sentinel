@@ -397,6 +397,7 @@ QUALITY_GATE_CMD_LINT="${QUALITY_GATE_CMD_LINT:-golangci-lint run}"
 QUALITY_GATE_CMD_CRD_CHECK="${QUALITY_GATE_CMD_CRD_CHECK:-bash ./scripts/check-crd-consistency.sh}"
 QUALITY_GATE_CMD_API_CONTRACT_SYNC="${QUALITY_GATE_CMD_API_CONTRACT_SYNC:-go test ./charts/kube-sentinel -run 'TestValuesSchemaIncludesProductionGatePolicy|TestValuesYamlIncludesProductionGatePolicyDefaults|TestValuesSchemaIncludesAPIContractPolicy|TestValuesYamlIncludesAPIContractPolicyDefaults|TestValuesSchemaIncludesReleaseReadinessPolicy|TestValuesYamlIncludesReleaseReadinessPolicyDefaults'}"
 QUALITY_GATE_CMD_HELM_SYNC="${QUALITY_GATE_CMD_HELM_SYNC:-go test ./charts/kube-sentinel -run 'TestValuesSchemaIncludesProductionGatePolicy|TestValuesYamlIncludesProductionGatePolicyDefaults|TestValuesSchemaIncludesAPIContractPolicy|TestValuesYamlIncludesAPIContractPolicyDefaults|TestValuesSchemaIncludesReleaseReadinessPolicy|TestValuesYamlIncludesReleaseReadinessPolicyDefaults'}"
+QUALITY_GATE_CMD_CHANGE_SPLIT_GOVERNANCE="${QUALITY_GATE_CMD_CHANGE_SPLIT_GOVERNANCE:-bash ./scripts/check-change-splitting-governance.sh}"
 
 run_step "unit_test" "unit_test" "unit_tests_failed" "run: go test ./..." "$QUALITY_GATE_CMD_TEST"
 run_step "race_core" "race" "race_detection_failed" "run: go test -race ./internal/..." "$QUALITY_GATE_CMD_RACE"
@@ -405,6 +406,7 @@ run_step "lint" "lint" "golangci_lint_failed" "run: golangci-lint run" "$QUALITY
 run_step "crd_consistency" "crd_consistency" "crd_generation_drift" "run: bash ./scripts/check-crd-consistency.sh" "$QUALITY_GATE_CMD_CRD_CHECK"
 run_step "api_contract_sync" "api_crd_helm_sync" "api_contract_sync_mismatch" "run: go test ./charts/kube-sentinel" "$QUALITY_GATE_CMD_API_CONTRACT_SYNC"
 run_step "helm_sync" "api_crd_helm_sync" "helm_constraints_mismatch" "run: go test ./charts/kube-sentinel" "$QUALITY_GATE_CMD_HELM_SYNC"
+run_step "change_splitting_governance" "delivery_quality_gate" "change_splitting_governance_violation" "run: bash ./scripts/check-change-splitting-governance.sh" "$QUALITY_GATE_CMD_CHANGE_SPLIT_GOVERNANCE"
 
 assert_slo_consistency "allow"
 assert_recovery_ready "allow"

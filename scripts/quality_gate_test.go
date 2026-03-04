@@ -12,7 +12,7 @@ func runQualityGate(t *testing.T, env map[string]string) (string, error) {
 	t.Helper()
 	cmd := exec.Command("bash", "./quality-gate.sh")
 	cmd.Dir = "."
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), "QUALITY_GATE_CMD_CHANGE_SPLIT_GOVERNANCE=true")
 	for key, value := range env {
 		cmd.Env = append(cmd.Env, key+"="+value)
 	}
@@ -62,7 +62,7 @@ func TestQualityGateOrderAllPass(t *testing.T) {
 		t.Fatalf("read trace failed: %v", err)
 	}
 	got := strings.Split(strings.TrimSpace(string(traceRaw)), "\n")
-	want := []string{"unit_test", "race_core", "vet", "lint", "crd_consistency", "api_contract_sync", "helm_sync"}
+	want := []string{"unit_test", "race_core", "vet", "lint", "crd_consistency", "api_contract_sync", "helm_sync", "change_splitting_governance"}
 	if len(got) != len(want) {
 		t.Fatalf("unexpected step count: got %d want %d (%v)", len(got), len(want), got)
 	}
@@ -385,5 +385,80 @@ func TestQualityGateEvidenceMissingRequiredFieldsBlocksPipeline(t *testing.T) {
 	}
 	if !strings.Contains(string(output), "DELIVERY_PIPELINE_REASON=quality_gate_evidence_missing_fields") {
 		t.Fatalf("unexpected pipeline output: %s", string(output))
+	}
+}
+
+func TestQualityGateBlocksOnChangeSplitGovernanceViolation(t *testing.T) {
+	env := map[string]string{
+		"QUALITY_GATE_CMD_TEST":                    "true",
+		"QUALITY_GATE_CMD_RACE":                    "true",
+		"QUALITY_GATE_CMD_VET":                     "true",
+		"QUALITY_GATE_CMD_LINT":                    "true",
+		"QUALITY_GATE_CMD_CRD_CHECK":               "true",
+		"QUALITY_GATE_CMD_API_CONTRACT_SYNC":       "true",
+		"QUALITY_GATE_CMD_HELM_SYNC":               "true",
+		"QUALITY_GATE_CMD_CHANGE_SPLIT_GOVERNANCE": "bash ./check-change-splitting-governance.sh",
+		"CHANGE_SPLIT_GOVERNANCE_ENABLED":          "true",
+		"CHANGE_SPLIT_CAPABILITY_COUNT":            "3",
+		"CHANGE_SPLIT_INCREMENT_ITEMS":             "11",
+		"CHANGE_SPLIT_RISK_DOMAINS":                "blocking",
+	}
+	output, err := runQualityGate(t, env)
+	if err == nil {
+		t.Fatalf("expected governance violation to fail, output: %s", output)
+	}
+	if !strings.Contains(output, "QUALITY_GATE_REASON=change_splitting_governance_violation") {
+		t.Fatalf("expected governance violation reason, output: %s", output)
+	}
+}
+
+func TestQualityGateAllowsWhenChangeSplitPlanProvided(t *testing.T) {
+	env := map[string]string{
+		"QUALITY_GATE_CMD_TEST":                    "true",
+		"QUALITY_GATE_CMD_RACE":                    "true",
+		"QUALITY_GATE_CMD_VET":                     "true",
+		"QUALITY_GATE_CMD_LINT":                    "true",
+		"QUALITY_GATE_CMD_CRD_CHECK":               "true",
+		"QUALITY_GATE_CMD_API_CONTRACT_SYNC":       "true",
+		"QUALITY_GATE_CMD_HELM_SYNC":               "true",
+		"QUALITY_GATE_CMD_CHANGE_SPLIT_GOVERNANCE": "bash ./check-change-splitting-governance.sh",
+		"CHANGE_SPLIT_GOVERNANCE_ENABLED":          "true",
+		"CHANGE_SPLIT_CAPABILITY_COUNT":            "3",
+		"CHANGE_SPLIT_INCREMENT_ITEMS":             "11",
+		"CHANGE_SPLIT_RISK_DOMAINS":                "blocking",
+		"CHANGE_SPLIT_HAS_SPLIT_PLAN":              "true",
+		"CHANGE_SPLIT_PLAN_REF":                    "change-a,change-b",
+	}
+	output, err := runQualityGate(t, env)
+	if err != nil {
+		t.Fatalf("expected split plan to pass: %v output=%s", err, output)
+	}
+	if !strings.Contains(output, "QUALITY_GATE_RESULT=allow") {
+		t.Fatalf("expected allow result, output: %s", output)
+	}
+}
+
+func TestQualityGateBlocksOnChangeSplitExceptionFieldsMissing(t *testing.T) {
+	env := map[string]string{
+		"QUALITY_GATE_CMD_TEST":                    "true",
+		"QUALITY_GATE_CMD_RACE":                    "true",
+		"QUALITY_GATE_CMD_VET":                     "true",
+		"QUALITY_GATE_CMD_LINT":                    "true",
+		"QUALITY_GATE_CMD_CRD_CHECK":               "true",
+		"QUALITY_GATE_CMD_API_CONTRACT_SYNC":       "true",
+		"QUALITY_GATE_CMD_HELM_SYNC":               "true",
+		"QUALITY_GATE_CMD_CHANGE_SPLIT_GOVERNANCE": "bash ./check-change-splitting-governance.sh",
+		"CHANGE_SPLIT_GOVERNANCE_ENABLED":          "true",
+		"CHANGE_SPLIT_CAPABILITY_COUNT":            "2",
+		"CHANGE_SPLIT_INCREMENT_ITEMS":             "6",
+		"CHANGE_SPLIT_RISK_DOMAINS":                "blocking,operational",
+		"CHANGE_SPLIT_EXCEPTION_APPROVED":          "true",
+	}
+	output, err := runQualityGate(t, env)
+	if err == nil {
+		t.Fatalf("expected missing exception fields to fail, output: %s", output)
+	}
+	if !strings.Contains(output, "QUALITY_GATE_REASON=change_splitting_governance_violation") {
+		t.Fatalf("expected governance violation reason, output: %s", output)
 	}
 }
