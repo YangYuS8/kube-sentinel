@@ -59,6 +59,30 @@
 - 人可读摘要：`delivery-summary.txt`，用于值班快速判断与回退触发。
 - 建议统一入口：`make delivery-pipeline`；必要时通过 `DELIVERY_PIPELINE_*` 环境变量注入 dry-run 与归档路径。
 
+## V1 go-live 决策流程（最小）
+
+- 五类闸门固定顺序：`quality -> stability -> drillRollback -> approvalFreeze -> auditIntegrity`。
+- 优先级固定：`quality > stability > drillRollback > approvalFreeze > auditIntegrity`；多闸门同时失败时按优先级输出 `failureCategory`。
+- 判定语义固定：任一闸门 `fail` 则 `DELIVERY_PIPELINE_DECISION=block`，全部 `pass` 才 `allow`。
+- 预生产前置约束：`DELIVERY_PIPELINE_PREPROD_STATUS` 必须为 `allow` 且证据未过期，否则阻断。
+- 回滚演练约束：`QUALITY_GATE_DRILL_SUCCESS_RATE` 不低于 `DELIVERY_PIPELINE_DRILL_MIN_SUCCESS_RATE`，且 `QUALITY_GATE_DRILL_ROLLBACK_P95_MS` 不高于 `DELIVERY_PIPELINE_DRILL_MAX_ROLLBACK_P95_MS`。
+- 冻结窗口约束：窗口命中时（`start <= now <= end`）禁止人工覆盖放量。
+
+## release decision pack 契约（最小）
+
+- 默认输出文件：`release-decision-pack.json`（可通过 `DELIVERY_PIPELINE_DECISION_PACK_FILE` 覆盖）。
+- 最小字段：`decision`、`failureCategory`、`rollbackCandidate`、`drillSummary`、`approval`、`correlationKey`、`timestamp`。
+- 决策包缺字段或语义不一致时，必须阻断生产灰度。
+- 机器可读字段命名保持稳定；下游解析失败应视为阻断条件。
+
+## go-live 失败处理与回退路径（最小）
+
+- `quality` 失败：先修复质量门禁，再重跑 `make delivery-pipeline`。
+- `stability` 失败：修复预生产验证或更新证据，禁止跳过预生产直接放量。
+- `drillRollback` 失败：先补演练直到达标，再进入 go-live。
+- `approvalFreeze` 失败：补齐审批等级或等待冻结窗口结束。
+- `auditIntegrity` 失败：补齐人工覆盖审计字段（`actor/reason/timestamp/traceKey`）并确保幂等。
+
 ## 预生产 dry-run 语义约束（最小）
 
 - `DRY_RUN_OUTCOME` 仅允许：`allow` / `degrade` / `block`。

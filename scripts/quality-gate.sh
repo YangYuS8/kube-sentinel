@@ -53,6 +53,14 @@ derive_budget_status() {
   esac
 }
 
+derive_rollout_recommendation() {
+  local outcome="$(normalize_outcome "$1")"
+  case "$outcome" in
+    allow) echo "proceed" ;;
+    *) echo "hold" ;;
+  esac
+}
+
 normalize_compatibility_class() {
   local value="${1:-backward-compatible}"
   case "$value" in
@@ -144,6 +152,23 @@ emit_release_readiness_fields() {
   echo "QUALITY_GATE_DRILL_ROLLBACK_P95_MS=${drill_rollback_p95_ms}"
   echo "QUALITY_GATE_DRILL_GATE_BYPASS_COUNT=${drill_gate_bypass_count}"
   echo "QUALITY_GATE_RELEASE_READINESS_DECISION=${readiness_decision}"
+}
+
+emit_go_live_fields() {
+  local decision="$(normalize_outcome "$1")"
+  local failure_category="${2:-none}"
+  local fix_hint="${3:-n/a}"
+  local recommendation="$(derive_rollout_recommendation "$decision")"
+
+  if [[ "$decision" == "allow" ]]; then
+    failure_category="none"
+    fix_hint="n/a"
+  fi
+
+  echo "QUALITY_GATE_GO_LIVE_DECISION=${decision}"
+  echo "QUALITY_GATE_GO_LIVE_FAILURE_CATEGORY=${failure_category}"
+  echo "QUALITY_GATE_GO_LIVE_FIX_HINT=${fix_hint}"
+  echo "QUALITY_GATE_GO_LIVE_ROLLOUT_RECOMMENDATION=${recommendation}"
 }
 
 assert_incident_level_mapping() {
@@ -265,6 +290,7 @@ print_failure() {
   emit_slo_fields "$outcome"
   emit_api_contract_fields
   emit_release_readiness_fields
+  emit_go_live_fields "$outcome" "$category" "$fix_hint"
   persist_quality_gate_evidence "block" "$category" "$reason" "$fix_hint"
 }
 
@@ -425,4 +451,5 @@ echo "QUALITY_GATE_FIX_HINT=n/a"
 emit_slo_fields "allow"
 emit_api_contract_fields
 emit_release_readiness_fields
+emit_go_live_fields "allow" "none" "n/a"
 persist_quality_gate_evidence "allow" "quality_gate" "all_checks_passed" "n/a"

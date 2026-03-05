@@ -1,0 +1,38 @@
+{
+  "decision": "allow",
+  "failureCategory": "none",
+  "failedGateReason": "none",
+  "rollbackCandidate": "stable-v1-rc1",
+  "drillSummary": {
+    "successRate": "0.98",
+    "minSuccessRate": "0.95",
+    "rollbackP95Ms": "120000",
+    "maxRollbackP95Ms": "300000",
+    "gateStatus": "pass",
+    "gateReason": "ok"
+  },
+  "approval": {
+    "requiredLevel": "observe_only",
+    "providedLevel": "observe_only",
+    "status": "pass",
+    "reason": "ok"
+  },
+  "freezeWindow": {
+    "active": "false",
+    "startEpochSeconds": "0",
+    "endEpochSeconds": "0"
+  },
+  "gateResults": {
+    "quality": {"status": "pass", "reason": "ok"},
+    "stability": {"status": "pass", "reason": "ok"},
+    "drillRollback": {"status": "pass", "reason": "ok"},
+    "approvalFreeze": {"status": "pass", "reason": "ok"},
+    "auditIntegrity": {"status": "pass", "reason": "ok"}
+  },
+  "operatorOverride": {
+    "enabled": "false",
+    "auditState": "false"
+  },
+  "correlationKey": "drill-v1-20260305-0030",
+  "timestamp": "2026-03-04T23:56:55Z"
+}
