@@ -68,6 +68,33 @@
 - 回滚演练约束：`QUALITY_GATE_DRILL_SUCCESS_RATE` 不低于 `DELIVERY_PIPELINE_DRILL_MIN_SUCCESS_RATE`，且 `QUALITY_GATE_DRILL_ROLLBACK_P95_MS` 不高于 `DELIVERY_PIPELINE_DRILL_MAX_ROLLBACK_P95_MS`。
 - 冻结窗口约束：窗口命中时（`start <= now <= end`）禁止人工覆盖放量。
 
+## V1 pilot/cutover 流程（最小）
+
+- 状态机固定：`pilot_prepare -> pilot_observe -> cutover_ready -> cutover_done`，失败或阻断进入 `cutover_blocked`。
+- 合法迁移：禁止跨阶段直切（例如 `pilot_prepare -> cutover_done`），非法迁移必须输出 `invalid_stage_transition`。
+- 批次前置检查：每个 pilot 批次放量前必须同时满足质量通过、证据完整、阶段合法。
+- 观察窗口门禁：进入 `cutover_ready/cutover_done` 前必须 `DELIVERY_PIPELINE_OBSERVE_WINDOW_COMPLETED=true` 且观察时长达标。
+- 自动回退触发：熔断触发、SLO 进入 `rollback_required`、证据不完整时必须输出 `cutover_auto_rollback`。
+
+## cutover decision pack 契约（最小）
+
+- 最小字段：`decision`、`failureCategory`、`pilotBatch`、`rollbackTarget`、`traceKey`、`approval.requiredLevel|providedLevel`、`timestamp`。
+- 建议补充字段：`pilotStateCurrent`、`pilotStateTarget`、`rollbackEvidence`、`sloMatrixAction`、`handoff.handoffOwner`。
+- 任一最小字段缺失或语义冲突时必须阻断放量。
+
+## 值班交接契约（最小）
+
+- 必填字段：`handoffOwner`、`approvalLevel`、`traceKey`、`rollbackCommandRef`、`handoffTimestamp`。
+- 交接缺失时必须阻断切流，禁止“先放量后补录”。
+- 冻结窗口内禁止人工覆盖放量，仅允许只读评估与告警。
+
+## pilot 期间 SLO 触发矩阵（最小）
+
+- `observe_only`：无越线，允许继续观察。
+- `pause_rollout`：中度退化，暂停新增批次但不自动回退。
+- `rollback_required`：严重退化或连续越线，必须触发自动回退。
+- 语义一致性要求：质量门禁、运行门禁与决策包中的 SLO 动作必须一致，否则阻断放量。
+
 ## release decision pack 契约（最小）
 
 - 默认输出文件：`release-decision-pack.json`（可通过 `DELIVERY_PIPELINE_DECISION_PACK_FILE` 覆盖）。

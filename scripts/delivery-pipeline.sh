@@ -11,6 +11,7 @@ PIPELINE_ARCHIVE_DIR="${DELIVERY_PIPELINE_ARCHIVE_DIR:-${PIPELINE_WORK_DIR}/arch
 OVERRIDE_IDEMPOTENCY_FILE="${DELIVERY_PIPELINE_OVERRIDE_IDEMPOTENCY_FILE:-${PIPELINE_WORK_DIR}/override-idempotency.log}"
 OVERRIDE_AUDIT_FILE="${DELIVERY_PIPELINE_OVERRIDE_AUDIT_FILE:-${PIPELINE_WORK_DIR}/override-audit.log}"
 GO_LIVE_DECISION_PACK_FILE="${DELIVERY_PIPELINE_DECISION_PACK_FILE:-${PIPELINE_WORK_DIR}/release-decision-pack.json}"
+CUTOVER_DECISION_PACK_FILE="${DELIVERY_PIPELINE_CUTOVER_DECISION_PACK_FILE:-${GO_LIVE_DECISION_PACK_FILE}}"
 
 QUALITY_GATE_CMD="${DELIVERY_PIPELINE_QUALITY_GATE_CMD:-bash ./scripts/quality-gate.sh}"
 DRY_RUN_CMD="${DELIVERY_PIPELINE_DRY_RUN_CMD:-printf 'DRY_RUN_OUTCOME=allow\nDRY_RUN_REASON=preprod_simulated\nDRY_RUN_TRACE_KEY=dryrun-default\n'}"
@@ -80,6 +81,102 @@ normalize_decision() {
     allow|block) echo "$value" ;;
     *) echo "block" ;;
   esac
+}
+
+normalize_pilot_state() {
+  local value="${1:-pilot_prepare}"
+  case "$value" in
+    pilot_prepare|pilot_observe|cutover_ready|cutover_blocked|cutover_done) echo "$value" ;;
+    *) echo "invalid" ;;
+  esac
+}
+
+is_valid_state_transition() {
+  local current="$1"
+  local target="$2"
+  if [[ "$current" == "$target" ]]; then
+    return 0
+  fi
+  case "$current:$target" in
+    pilot_prepare:pilot_observe) return 0 ;;
+    pilot_observe:cutover_ready) return 0 ;;
+    pilot_observe:cutover_blocked) return 0 ;;
+    cutover_ready:cutover_done) return 0 ;;
+    cutover_ready:cutover_blocked) return 0 ;;
+    cutover_blocked:pilot_observe) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+derive_next_state() {
+  local current="$1"
+  case "$current" in
+    pilot_prepare) echo "pilot_observe" ;;
+    pilot_observe) echo "cutover_ready" ;;
+    cutover_ready) echo "cutover_done" ;;
+    cutover_blocked) echo "pilot_observe" ;;
+    cutover_done) echo "cutover_done" ;;
+    *) echo "invalid" ;;
+  esac
+}
+
+normalize_slo_breach_level() {
+  local value="${1:-none}"
+  case "$value" in
+    none|moderate|critical) echo "$value" ;;
+    *) echo "invalid" ;;
+  esac
+}
+
+derive_slo_matrix_action() {
+  local breach_level="$1"
+  local consecutive_breaches="$2"
+  local consecutive_threshold="$3"
+
+  if [[ "$breach_level" == "critical" ]]; then
+    echo "rollback_required"
+    return 0
+  fi
+  if is_integer "$consecutive_breaches" && is_integer "$consecutive_threshold" && (( consecutive_breaches >= consecutive_threshold )) && (( consecutive_threshold > 0 )); then
+    echo "rollback_required"
+    return 0
+  fi
+  if [[ "$breach_level" == "moderate" ]]; then
+    echo "pause_rollout"
+    return 0
+  fi
+  echo "observe_only"
+}
+
+ensure_handoff_required_fields() {
+  local handoff_owner="$1"
+  local approval_level="$2"
+  local trace_key="$3"
+  local rollback_command_ref="$4"
+  local handoff_timestamp="$5"
+  local missing=()
+
+  if [[ -z "$handoff_owner" ]]; then
+    missing+=("handoffOwner")
+  fi
+  if [[ -z "$approval_level" ]]; then
+    missing+=("approvalLevel")
+  fi
+  if [[ -z "$trace_key" ]]; then
+    missing+=("traceKey")
+  fi
+  if [[ -z "$rollback_command_ref" ]]; then
+    missing+=("rollbackCommandRef")
+  fi
+  if [[ -z "$handoff_timestamp" ]]; then
+    missing+=("handoffTimestamp")
+  fi
+
+  if (( ${#missing[@]} > 0 )); then
+    echo "${missing[*]}"
+    return 1
+  fi
+  return 0
 }
 
 is_integer() {
@@ -155,10 +252,11 @@ resolve_failure_category() {
 ensure_decision_pack_required_fields() {
   local final_decision="$1"
   local failure_category="$2"
-  local rollback_candidate="$3"
-  local approval_status="$4"
-  local correlation_key="$5"
-  local decision_timestamp="$6"
+  local pilot_batch="$3"
+  local rollback_candidate="$4"
+  local approval_status="$5"
+  local correlation_key="$6"
+  local decision_timestamp="$7"
   local missing=()
 
   if [[ -z "$final_decision" ]]; then
@@ -167,8 +265,11 @@ ensure_decision_pack_required_fields() {
   if [[ -z "$failure_category" ]]; then
     missing+=("failureCategory")
   fi
+  if [[ -z "$pilot_batch" ]]; then
+    missing+=("pilotBatch")
+  fi
   if [[ -z "$rollback_candidate" ]]; then
-    missing+=("rollbackCandidate")
+    missing+=("rollbackTarget")
   fi
   if [[ -z "$approval_status" ]]; then
     missing+=("approvalStatus")
@@ -244,7 +345,7 @@ write_failure_evidence() {
   "traceFile": "${PIPELINE_TRACE_FILE}",
   "qualityOutputFile": "${QUALITY_OUTPUT_FILE}",
   "dryRunOutputFile": "${DRY_RUN_OUTPUT_FILE}",
-  "decisionPackFile": "${GO_LIVE_DECISION_PACK_FILE}"
+  "decisionPackFile": "${CUTOVER_DECISION_PACK_FILE}"
 }
 EOF
   cat >"${PIPELINE_SUMMARY_FILE}" <<EOF
@@ -331,6 +432,27 @@ pipeline_failed_stage=""
 pipeline_reason=""
 pipeline_fix_hint=""
 
+pilot_current_state="$(normalize_pilot_state "${DELIVERY_PIPELINE_STATE_CURRENT:-pilot_prepare}")"
+pilot_target_state="$(normalize_pilot_state "${DELIVERY_PIPELINE_STATE_TARGET:-$(derive_next_state "${DELIVERY_PIPELINE_STATE_CURRENT:-pilot_prepare}")}")"
+pilot_next_state="$(derive_next_state "${DELIVERY_PIPELINE_STATE_CURRENT:-pilot_prepare}")"
+pilot_batch="${DELIVERY_PIPELINE_PILOT_BATCH:-1}"
+
+if [[ "$pilot_current_state" == "invalid" || "$pilot_target_state" == "invalid" || "$pilot_next_state" == "invalid" ]]; then
+  pipeline_failed_stage="pilot_state_machine"
+  pipeline_reason="invalid_pilot_state"
+  pipeline_fix_hint="use pilot_prepare|pilot_observe|cutover_ready|cutover_blocked|cutover_done"
+elif ! is_valid_state_transition "$pilot_current_state" "$pilot_target_state"; then
+  pipeline_failed_stage="pilot_state_machine"
+  pipeline_reason="invalid_stage_transition"
+  pipeline_fix_hint="advance state sequentially according to pilot state machine"
+fi
+
+if [[ -z "$pipeline_failed_stage" ]] && ! is_integer "$pilot_batch"; then
+  pipeline_failed_stage="pilot_precheck"
+  pipeline_reason="pilot_batch_invalid"
+  pipeline_fix_hint="set DELIVERY_PIPELINE_PILOT_BATCH to a positive integer"
+fi
+
 if ! run_stage "quality_gate" "$QUALITY_GATE_CMD" "$QUALITY_OUTPUT_FILE"; then
   pipeline_failed_stage="quality_gate"
   pipeline_reason="quality_gate_failed"
@@ -411,6 +533,23 @@ drill_max_rollback_p95_ms="${DELIVERY_PIPELINE_DRILL_MAX_ROLLBACK_P95_MS:-300000
 freeze_window_start_epoch="${DELIVERY_PIPELINE_FREEZE_WINDOW_START_EPOCH_SECONDS:-0}"
 freeze_window_end_epoch="${DELIVERY_PIPELINE_FREEZE_WINDOW_END_EPOCH_SECONDS:-0}"
 
+observe_window_completed="${DELIVERY_PIPELINE_OBSERVE_WINDOW_COMPLETED:-true}"
+observe_window_actual_minutes="${DELIVERY_PIPELINE_OBSERVE_WINDOW_ACTUAL_MINUTES:-30}"
+observe_window_min_minutes="${DELIVERY_PIPELINE_OBSERVE_WINDOW_MIN_MINUTES:-30}"
+
+slo_breach_level="$(normalize_slo_breach_level "${DELIVERY_PIPELINE_SLO_BREACH_LEVEL:-none}")"
+slo_consecutive_breaches="${DELIVERY_PIPELINE_SLO_CONSECUTIVE_BREACHES:-0}"
+slo_consecutive_threshold="${DELIVERY_PIPELINE_SLO_CONSECUTIVE_BREACH_THRESHOLD:-3}"
+slo_matrix_action="$(derive_slo_matrix_action "$slo_breach_level" "$slo_consecutive_breaches" "$slo_consecutive_threshold")"
+quality_gate_slo_matrix_action="$(extract_key "$QUALITY_OUTPUT_FILE" "QUALITY_GATE_SLO_MATRIX_ACTION")"
+if [[ -z "$quality_gate_slo_matrix_action" ]]; then
+  quality_gate_slo_matrix_action="${QUALITY_GATE_SLO_MATRIX_ACTION:-$slo_matrix_action}"
+fi
+
+handoff_owner="${DELIVERY_PIPELINE_HANDOFF_OWNER-${DELIVERY_PIPELINE_OVERRIDE_ACTOR:-oncall-default}}"
+rollback_command_ref="${DELIVERY_PIPELINE_ROLLBACK_COMMAND_REF-runbook://runtime-block-rollback}"
+handoff_timestamp="${DELIVERY_PIPELINE_HANDOFF_TIMESTAMP-${DELIVERY_PIPELINE_DECISION_TIMESTAMP:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}}"
+
 required_approval="$(derive_oncall_approval "$release_decision")"
 approval_level="${ONCALL_APPROVAL_LEVEL:-${ONCALL_APPROVAL_TRIGGER:-$required_approval}}"
 
@@ -437,12 +576,27 @@ if [[ "$quality_result" != "allow" || "$release_decision" != "allow" ]]; then
   quality_gate_reason="quality_or_release_not_allow"
 fi
 
+if [[ "$pilot_current_state" != "$pilot_target_state" ]] && [[ "$pilot_target_state" != "$pilot_next_state" ]]; then
+  quality_gate_status="fail"
+  quality_gate_reason="pilot_state_not_sequential"
+fi
+
 if [[ "$preprod_status" != "allow" ]]; then
   stability_gate_status="fail"
   stability_gate_reason="preprod_not_passed"
 elif is_evidence_expired "$now_epoch" "$preprod_evidence_epoch" "$preprod_evidence_ttl_seconds"; then
   stability_gate_status="fail"
   stability_gate_reason="preprod_evidence_expired"
+fi
+
+if [[ "$pilot_target_state" == "cutover_ready" || "$pilot_target_state" == "cutover_done" ]]; then
+  if [[ "$observe_window_completed" != "true" ]]; then
+    stability_gate_status="fail"
+    stability_gate_reason="observe_window_not_completed"
+  elif ! is_integer "$observe_window_actual_minutes" || ! is_integer "$observe_window_min_minutes" || (( observe_window_actual_minutes < observe_window_min_minutes )); then
+    stability_gate_status="fail"
+    stability_gate_reason="observe_window_not_met"
+  fi
 fi
 
 if ! is_non_negative_number "$drill_success_rate" || ! is_non_negative_number "$drill_min_success_rate"; then
@@ -482,6 +636,31 @@ if [[ -z "$rollback_candidate" ]]; then
   audit_integrity_gate_reason="decision_pack_missing_rollback_candidate"
 fi
 
+handoff_missing_fields=""
+if ! handoff_missing_fields="$(ensure_handoff_required_fields "$handoff_owner" "$approval_level" "$correlation_key" "$rollback_command_ref" "$handoff_timestamp")"; then
+  audit_integrity_gate_status="fail"
+  audit_integrity_gate_reason="handoff_fields_missing"
+fi
+
+if [[ "$slo_breach_level" == "invalid" ]]; then
+  drill_gate_status="fail"
+  drill_gate_reason="slo_breach_level_invalid"
+fi
+
+if [[ "$quality_gate_slo_matrix_action" != "$slo_matrix_action" ]]; then
+  drill_gate_status="fail"
+  drill_gate_reason="slo_threshold_contract_mismatch"
+fi
+
+auto_rollback_reason="none"
+if [[ "${DELIVERY_PIPELINE_CIRCUIT_BREAKER_TRIGGERED:-false}" == "true" ]]; then
+  auto_rollback_reason="circuit_breaker_triggered"
+elif [[ "$slo_matrix_action" == "rollback_required" ]]; then
+  auto_rollback_reason="slo_rollback_required"
+elif [[ "$audit_integrity_gate_status" == "fail" ]]; then
+  auto_rollback_reason="evidence_incomplete"
+fi
+
 go_live_failure_category="$(resolve_failure_category "$quality_gate_status" "$stability_gate_status" "$drill_gate_status" "$approval_freeze_gate_status" "$audit_integrity_gate_status")"
 go_live_decision="allow"
 if [[ "$go_live_failure_category" != "none" ]]; then
@@ -489,7 +668,7 @@ if [[ "$go_live_failure_category" != "none" ]]; then
 fi
 
 decision_pack_missing_fields=""
-if ! decision_pack_missing_fields="$(ensure_decision_pack_required_fields "$go_live_decision" "$go_live_failure_category" "$rollback_candidate" "$approval_level" "$correlation_key" "$decision_timestamp")"; then
+if ! decision_pack_missing_fields="$(ensure_decision_pack_required_fields "$go_live_decision" "$go_live_failure_category" "$pilot_batch" "$rollback_candidate" "$approval_level" "$correlation_key" "$decision_timestamp")"; then
   go_live_decision="block"
   go_live_failure_category="audit_integrity"
   audit_integrity_gate_status="fail"
@@ -498,6 +677,12 @@ if ! decision_pack_missing_fields="$(ensure_decision_pack_required_fields "$go_l
     pipeline_reason="decision_pack_missing_fields"
     pipeline_fix_hint="ensure release decision pack required fields are populated"
   fi
+fi
+
+if [[ "$auto_rollback_reason" != "none" ]]; then
+  go_live_decision="block"
+  go_live_failure_category="stability"
+  pilot_target_state="cutover_blocked"
 fi
 
 if [[ -n "$pipeline_failed_stage" ]]; then
@@ -513,17 +698,27 @@ if [[ -n "$pipeline_failed_stage" ]]; then
 fi
 
 final_result="$(normalize_decision "$go_live_decision")"
+if [[ "$auto_rollback_reason" != "none" ]]; then
+  pipeline_reason="cutover_auto_rollback"
+fi
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 archive_run_dir="${PIPELINE_ARCHIVE_DIR}/run-${timestamp}"
 mkdir -p "$archive_run_dir"
 
-cat >"${GO_LIVE_DECISION_PACK_FILE}" <<EOF
+cat >"${CUTOVER_DECISION_PACK_FILE}" <<EOF
 {
   "decision": "${final_result}",
   "failureCategory": "${go_live_failure_category}",
+  "pilotBatch": "${pilot_batch}",
+  "pilotStateCurrent": "${pilot_current_state}",
+  "pilotStateTarget": "${pilot_target_state}",
+  "pilotStateNext": "${pilot_next_state}",
   "failedGateReason": "$(resolve_failure_category "$quality_gate_status" "$stability_gate_status" "$drill_gate_status" "$approval_freeze_gate_status" "$audit_integrity_gate_status")",
-  "rollbackCandidate": "${rollback_candidate}",
+  "rollbackTarget": "${rollback_candidate}",
+  "rollbackEvidence": "${pipeline_reason:-none}",
+  "rollbackCommandRef": "${rollback_command_ref}",
+  "sloMatrixAction": "${slo_matrix_action}",
   "drillSummary": {
     "successRate": "${drill_success_rate}",
     "minSuccessRate": "${drill_min_success_rate}",
@@ -537,6 +732,10 @@ cat >"${GO_LIVE_DECISION_PACK_FILE}" <<EOF
     "providedLevel": "${approval_level}",
     "status": "${approval_freeze_gate_status}",
     "reason": "${approval_freeze_gate_reason}"
+  },
+  "handoff": {
+    "handoffOwner": "${handoff_owner}",
+    "handoffTimestamp": "${handoff_timestamp}"
   },
   "freezeWindow": {
     "active": "${freeze_window_active}",
@@ -554,6 +753,7 @@ cat >"${GO_LIVE_DECISION_PACK_FILE}" <<EOF
     "enabled": "${DELIVERY_PIPELINE_OPERATOR_OVERRIDE:-false}",
     "auditState": "${override_state}"
   },
+  "traceKey": "${correlation_key}",
   "correlationKey": "${correlation_key}",
   "timestamp": "${decision_timestamp}"
 }
@@ -567,7 +767,13 @@ cat >"${PIPELINE_EVIDENCE_JSON}" <<EOF
   "reasonCode": "all_stages_completed",
   "fixHint": "n/a",
   "goLiveDecision": "${final_result}",
+  "cutoverDecision": "${final_result}",
   "goLiveFailureCategory": "${go_live_failure_category}",
+  "pilotBatch": "${pilot_batch}",
+  "pilotStateCurrent": "${pilot_current_state}",
+  "pilotStateTarget": "${pilot_target_state}",
+  "sloMatrixAction": "${slo_matrix_action}",
+  "rollbackEvidence": "${pipeline_reason:-none}",
   "qualityResult": "${quality_result}",
   "releaseDecision": "${release_decision}",
   "dryRunOutcome": "${dry_run_outcome}",
@@ -577,7 +783,7 @@ cat >"${PIPELINE_EVIDENCE_JSON}" <<EOF
   "operatorOverride": "${DELIVERY_PIPELINE_OPERATOR_OVERRIDE:-false}",
   "operatorOverrideAuditState": "${override_state}",
   "operatorOverrideAuditFile": "${OVERRIDE_AUDIT_FILE}",
-  "goLiveDecisionPackFile": "${GO_LIVE_DECISION_PACK_FILE}",
+  "goLiveDecisionPackFile": "${CUTOVER_DECISION_PACK_FILE}",
   "traceFile": "${PIPELINE_TRACE_FILE}",
   "qualityOutputFile": "${QUALITY_OUTPUT_FILE}",
   "dryRunOutputFile": "${DRY_RUN_OUTPUT_FILE}",
@@ -591,6 +797,12 @@ DELIVERY_PIPELINE_FAILED_STAGE=none
 DELIVERY_PIPELINE_REASON=all_stages_completed
 DELIVERY_PIPELINE_DECISION=${final_result}
 DELIVERY_PIPELINE_FAILURE_CATEGORY=${go_live_failure_category}
+DELIVERY_PIPELINE_PILOT_BATCH=${pilot_batch}
+DELIVERY_PIPELINE_PILOT_STATE_CURRENT=${pilot_current_state}
+DELIVERY_PIPELINE_PILOT_STATE_TARGET=${pilot_target_state}
+DELIVERY_PIPELINE_PILOT_STATE_NEXT=${pilot_next_state}
+DELIVERY_PIPELINE_SLO_MATRIX_ACTION=${slo_matrix_action}
+DELIVERY_PIPELINE_ROLLBACK_EVIDENCE=${pipeline_reason:-none}
 DELIVERY_PIPELINE_GATE_QUALITY_STATUS=${quality_gate_status}
 DELIVERY_PIPELINE_GATE_STABILITY_STATUS=${stability_gate_status}
 DELIVERY_PIPELINE_GATE_DRILL_ROLLBACK_STATUS=${drill_gate_status}
@@ -606,7 +818,7 @@ DELIVERY_PIPELINE_OPERATOR_OVERRIDE_AUDIT_STATE=${override_state}
 DELIVERY_PIPELINE_TRACE_FILE=${PIPELINE_TRACE_FILE}
 DELIVERY_PIPELINE_EVIDENCE_JSON=${PIPELINE_EVIDENCE_JSON}
 DELIVERY_PIPELINE_SUMMARY_FILE=${PIPELINE_SUMMARY_FILE}
-DELIVERY_PIPELINE_DECISION_PACK_FILE=${GO_LIVE_DECISION_PACK_FILE}
+DELIVERY_PIPELINE_DECISION_PACK_FILE=${CUTOVER_DECISION_PACK_FILE}
 EOF
 
 append_trace "archive_evidence"
@@ -614,7 +826,7 @@ cp "$QUALITY_OUTPUT_FILE" "$archive_run_dir/quality-gate.env"
 cp "$DRY_RUN_OUTPUT_FILE" "$archive_run_dir/dry-run.env"
 cp "$PIPELINE_EVIDENCE_JSON" "$archive_run_dir/delivery-evidence.json"
 cp "$PIPELINE_SUMMARY_FILE" "$archive_run_dir/delivery-summary.txt"
-cp "$GO_LIVE_DECISION_PACK_FILE" "$archive_run_dir/release-decision-pack.json"
+cp "$CUTOVER_DECISION_PACK_FILE" "$archive_run_dir/release-decision-pack.json"
 cp "$PIPELINE_TRACE_FILE" "$archive_run_dir/delivery-pipeline.trace"
 if [[ -f "$OVERRIDE_AUDIT_FILE" ]]; then
   cp "$OVERRIDE_AUDIT_FILE" "$archive_run_dir/override-audit.log"
@@ -625,6 +837,12 @@ echo "DELIVERY_PIPELINE_FAILED_STAGE=none"
 echo "DELIVERY_PIPELINE_REASON=all_stages_completed"
 echo "DELIVERY_PIPELINE_DECISION=${final_result}"
 echo "DELIVERY_PIPELINE_FAILURE_CATEGORY=${go_live_failure_category}"
+echo "DELIVERY_PIPELINE_PILOT_BATCH=${pilot_batch}"
+echo "DELIVERY_PIPELINE_PILOT_STATE_CURRENT=${pilot_current_state}"
+echo "DELIVERY_PIPELINE_PILOT_STATE_TARGET=${pilot_target_state}"
+echo "DELIVERY_PIPELINE_PILOT_STATE_NEXT=${pilot_next_state}"
+echo "DELIVERY_PIPELINE_SLO_MATRIX_ACTION=${slo_matrix_action}"
+echo "DELIVERY_PIPELINE_ROLLBACK_EVIDENCE=${pipeline_reason:-none}"
 echo "DELIVERY_PIPELINE_GATE_QUALITY_STATUS=${quality_gate_status}"
 echo "DELIVERY_PIPELINE_GATE_STABILITY_STATUS=${stability_gate_status}"
 echo "DELIVERY_PIPELINE_GATE_DRILL_ROLLBACK_STATUS=${drill_gate_status}"
@@ -634,4 +852,4 @@ echo "DELIVERY_PIPELINE_OPERATOR_OVERRIDE_AUDIT_STATE=${override_state}"
 echo "DELIVERY_PIPELINE_ARCHIVE_DIR=${archive_run_dir}"
 echo "DELIVERY_PIPELINE_EVIDENCE_JSON=${PIPELINE_EVIDENCE_JSON}"
 echo "DELIVERY_PIPELINE_SUMMARY_FILE=${PIPELINE_SUMMARY_FILE}"
-echo "DELIVERY_PIPELINE_DECISION_PACK_FILE=${GO_LIVE_DECISION_PACK_FILE}"
+echo "DELIVERY_PIPELINE_DECISION_PACK_FILE=${CUTOVER_DECISION_PACK_FILE}"

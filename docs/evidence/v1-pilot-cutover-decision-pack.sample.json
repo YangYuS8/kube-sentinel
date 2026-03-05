@@ -1,0 +1,50 @@
+{
+  "decision": "allow",
+  "failureCategory": "none",
+  "pilotBatch": "2",
+  "pilotStateCurrent": "pilot_observe",
+  "pilotStateTarget": "cutover_ready",
+  "pilotStateNext": "cutover_ready",
+  "failedGateReason": "none",
+  "rollbackTarget": "stable-v1-pilot-batch1",
+  "rollbackEvidence": "none",
+  "rollbackCommandRef": "runbook://runtime-block-rollback",
+  "sloMatrixAction": "observe_only",
+  "drillSummary": {
+    "successRate": "0.99",
+    "minSuccessRate": "0.95",
+    "rollbackP95Ms": "110000",
+    "maxRollbackP95Ms": "300000",
+    "gateStatus": "pass",
+    "gateReason": "ok"
+  },
+  "approval": {
+    "requiredLevel": "observe_only",
+    "providedLevel": "observe_only",
+    "status": "pass",
+    "reason": "ok"
+  },
+  "handoff": {
+    "handoffOwner": "oncall-pilot-a",
+    "handoffTimestamp": "2026-03-05T09:30:00Z"
+  },
+  "freezeWindow": {
+    "active": "false",
+    "startEpochSeconds": "0",
+    "endEpochSeconds": "0"
+  },
+  "gateResults": {
+    "quality": {"status": "pass", "reason": "ok"},
+    "stability": {"status": "pass", "reason": "ok"},
+    "drillRollback": {"status": "pass", "reason": "ok"},
+    "approvalFreeze": {"status": "pass", "reason": "ok"},
+    "auditIntegrity": {"status": "pass", "reason": "ok"}
+  },
+  "operatorOverride": {
+    "enabled": "false",
+    "auditState": "false"
+  },
+  "traceKey": "pilot-v1-20260305-0930",
+  "correlationKey": "pilot-v1-20260305-0930",
+  "timestamp": "2026-03-05T04:49:13Z"
+}

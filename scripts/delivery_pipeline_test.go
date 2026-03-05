@@ -299,10 +299,148 @@ func TestDeliveryPipelineDecisionPackContractStable(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("read decision pack failed: %v", readErr)
 	}
-	for _, token := range []string{"\"decision\"", "\"failureCategory\"", "\"rollbackCandidate\"", "\"drillSummary\"", "\"approval\"", "\"correlationKey\"", "\"timestamp\""} {
+	for _, token := range []string{"\"decision\"", "\"failureCategory\"", "\"pilotBatch\"", "\"rollbackTarget\"", "\"drillSummary\"", "\"approval\"", "\"traceKey\"", "\"timestamp\""} {
 		if !strings.Contains(string(raw), token) {
 			t.Fatalf("decision pack missing %s: %s", token, string(raw))
 		}
+	}
+}
+
+func TestDeliveryPipelinePilotStateMachineTransitionValidation(t *testing.T) {
+	workDir := t.TempDir()
+	baseEnv := map[string]string{
+		"DELIVERY_PIPELINE_WORK_DIR":         workDir,
+		"DELIVERY_PIPELINE_QUALITY_GATE_CMD": "printf 'QUALITY_GATE_RESULT=allow\nQUALITY_GATE_CATEGORY=quality_gate\nQUALITY_GATE_REASON=ok\nQUALITY_GATE_FIX_HINT=n/a\nQUALITY_GATE_RELEASE_DECISION=allow\nQUALITY_GATE_RELEASE_READINESS_ROLLBACK_CANDIDATE=stable-pilot-1\nQUALITY_GATE_DRILL_SUCCESS_RATE=1.0\nQUALITY_GATE_DRILL_ROLLBACK_P95_MS=100\nQUALITY_GATE_SLO_MATRIX_ACTION=observe_only\n'",
+		"DELIVERY_PIPELINE_DRY_RUN_CMD":      "printf 'DRY_RUN_OUTCOME=allow\nDRY_RUN_REASON=ok\nDRY_RUN_TRACE_KEY=trace-pilot-state\n'",
+		"ONCALL_APPROVAL_LEVEL":              "observe_only",
+	}
+
+	allowedOutput, allowedErr := runDeliveryPipeline(t, map[string]string{
+		"DELIVERY_PIPELINE_WORK_DIR":         baseEnv["DELIVERY_PIPELINE_WORK_DIR"],
+		"DELIVERY_PIPELINE_QUALITY_GATE_CMD": baseEnv["DELIVERY_PIPELINE_QUALITY_GATE_CMD"],
+		"DELIVERY_PIPELINE_DRY_RUN_CMD":      baseEnv["DELIVERY_PIPELINE_DRY_RUN_CMD"],
+		"ONCALL_APPROVAL_LEVEL":              baseEnv["ONCALL_APPROVAL_LEVEL"],
+		"DELIVERY_PIPELINE_STATE_CURRENT":    "pilot_prepare",
+		"DELIVERY_PIPELINE_STATE_TARGET":     "pilot_observe",
+	})
+	if allowedErr != nil {
+		t.Fatalf("expected legal transition to pass: %v output=%s", allowedErr, allowedOutput)
+	}
+	if !strings.Contains(allowedOutput, "DELIVERY_PIPELINE_PILOT_STATE_TARGET=pilot_observe") {
+		t.Fatalf("expected target state output, got=%s", allowedOutput)
+	}
+
+	blockedOutput, blockedErr := runDeliveryPipeline(t, map[string]string{
+		"DELIVERY_PIPELINE_WORK_DIR":         baseEnv["DELIVERY_PIPELINE_WORK_DIR"],
+		"DELIVERY_PIPELINE_QUALITY_GATE_CMD": baseEnv["DELIVERY_PIPELINE_QUALITY_GATE_CMD"],
+		"DELIVERY_PIPELINE_DRY_RUN_CMD":      baseEnv["DELIVERY_PIPELINE_DRY_RUN_CMD"],
+		"ONCALL_APPROVAL_LEVEL":              baseEnv["ONCALL_APPROVAL_LEVEL"],
+		"DELIVERY_PIPELINE_STATE_CURRENT":    "pilot_prepare",
+		"DELIVERY_PIPELINE_STATE_TARGET":     "cutover_done",
+	})
+	if blockedErr == nil {
+		t.Fatalf("expected invalid transition to fail, output=%s", blockedOutput)
+	}
+	if !strings.Contains(blockedOutput, "DELIVERY_PIPELINE_REASON=invalid_stage_transition") {
+		t.Fatalf("expected invalid_stage_transition reason, output=%s", blockedOutput)
+	}
+}
+
+func TestDeliveryPipelineObserveWindowGate(t *testing.T) {
+	workDir := t.TempDir()
+	output, err := runDeliveryPipeline(t, map[string]string{
+		"DELIVERY_PIPELINE_WORK_DIR":                      workDir,
+		"DELIVERY_PIPELINE_QUALITY_GATE_CMD":              "printf 'QUALITY_GATE_RESULT=allow\nQUALITY_GATE_CATEGORY=quality_gate\nQUALITY_GATE_REASON=ok\nQUALITY_GATE_FIX_HINT=n/a\nQUALITY_GATE_RELEASE_DECISION=allow\nQUALITY_GATE_RELEASE_READINESS_ROLLBACK_CANDIDATE=stable-observe\nQUALITY_GATE_DRILL_SUCCESS_RATE=1.0\nQUALITY_GATE_DRILL_ROLLBACK_P95_MS=100\nQUALITY_GATE_SLO_MATRIX_ACTION=observe_only\n'",
+		"DELIVERY_PIPELINE_DRY_RUN_CMD":                   "printf 'DRY_RUN_OUTCOME=allow\nDRY_RUN_REASON=ok\nDRY_RUN_TRACE_KEY=trace-observe\n'",
+		"ONCALL_APPROVAL_LEVEL":                           "observe_only",
+		"DELIVERY_PIPELINE_STATE_CURRENT":                 "pilot_observe",
+		"DELIVERY_PIPELINE_STATE_TARGET":                  "cutover_ready",
+		"DELIVERY_PIPELINE_OBSERVE_WINDOW_COMPLETED":      "false",
+		"DELIVERY_PIPELINE_OBSERVE_WINDOW_ACTUAL_MINUTES": "10",
+		"DELIVERY_PIPELINE_OBSERVE_WINDOW_MIN_MINUTES":    "30",
+	})
+	if err != nil {
+		t.Fatalf("expected completed run with block decision: %v output=%s", err, output)
+	}
+	if !strings.Contains(output, "DELIVERY_PIPELINE_GATE_STABILITY_STATUS=fail") {
+		t.Fatalf("expected stability gate fail, output=%s", output)
+	}
+}
+
+func TestDeliveryPipelineAutoRollbackEvidence(t *testing.T) {
+	workDir := t.TempDir()
+	output, err := runDeliveryPipeline(t, map[string]string{
+		"DELIVERY_PIPELINE_WORK_DIR":                 workDir,
+		"DELIVERY_PIPELINE_QUALITY_GATE_CMD":         "printf 'QUALITY_GATE_RESULT=allow\nQUALITY_GATE_CATEGORY=quality_gate\nQUALITY_GATE_REASON=ok\nQUALITY_GATE_FIX_HINT=n/a\nQUALITY_GATE_RELEASE_DECISION=allow\nQUALITY_GATE_RELEASE_READINESS_ROLLBACK_CANDIDATE=stable-cutover\nQUALITY_GATE_DRILL_SUCCESS_RATE=1.0\nQUALITY_GATE_DRILL_ROLLBACK_P95_MS=100\nQUALITY_GATE_SLO_MATRIX_ACTION=rollback_required\n'",
+		"DELIVERY_PIPELINE_DRY_RUN_CMD":              "printf 'DRY_RUN_OUTCOME=allow\nDRY_RUN_REASON=ok\nDRY_RUN_TRACE_KEY=trace-auto-rollback\n'",
+		"ONCALL_APPROVAL_LEVEL":                      "observe_only",
+		"DELIVERY_PIPELINE_STATE_CURRENT":            "cutover_ready",
+		"DELIVERY_PIPELINE_STATE_TARGET":             "cutover_done",
+		"DELIVERY_PIPELINE_SLO_BREACH_LEVEL":         "critical",
+		"DELIVERY_PIPELINE_SLO_CONSECUTIVE_BREACHES": "4",
+	})
+	if err != nil {
+		t.Fatalf("expected completed run with block decision: %v output=%s", err, output)
+	}
+	if !strings.Contains(output, "DELIVERY_PIPELINE_ROLLBACK_EVIDENCE=cutover_auto_rollback") {
+		t.Fatalf("expected cutover_auto_rollback evidence, output=%s", output)
+	}
+}
+
+func TestDeliveryPipelineHandoffContractValidation(t *testing.T) {
+	workDir := t.TempDir()
+	output, err := runDeliveryPipeline(t, map[string]string{
+		"DELIVERY_PIPELINE_WORK_DIR":         workDir,
+		"DELIVERY_PIPELINE_QUALITY_GATE_CMD": "printf 'QUALITY_GATE_RESULT=allow\nQUALITY_GATE_CATEGORY=quality_gate\nQUALITY_GATE_REASON=ok\nQUALITY_GATE_FIX_HINT=n/a\nQUALITY_GATE_RELEASE_DECISION=allow\nQUALITY_GATE_RELEASE_READINESS_ROLLBACK_CANDIDATE=stable-handoff\nQUALITY_GATE_DRILL_SUCCESS_RATE=1.0\nQUALITY_GATE_DRILL_ROLLBACK_P95_MS=100\nQUALITY_GATE_SLO_MATRIX_ACTION=observe_only\n'",
+		"DELIVERY_PIPELINE_DRY_RUN_CMD":      "printf 'DRY_RUN_OUTCOME=allow\nDRY_RUN_REASON=ok\nDRY_RUN_TRACE_KEY=trace-handoff\n'",
+		"ONCALL_APPROVAL_LEVEL":              "observe_only",
+		"DELIVERY_PIPELINE_HANDOFF_OWNER":    "",
+	})
+	if err != nil {
+		t.Fatalf("expected completed run with block decision: %v output=%s", err, output)
+	}
+	if !strings.Contains(output, "DELIVERY_PIPELINE_GATE_AUDIT_INTEGRITY_STATUS=fail") {
+		t.Fatalf("expected audit integrity fail, output=%s", output)
+	}
+}
+
+func TestDeliveryPipelineSLOMatrixBoundaryAndContract(t *testing.T) {
+	cases := []struct {
+		name              string
+		breachLevel       string
+		consecutive       string
+		qualityGateAction string
+		expectAction      string
+		expectFailGate    bool
+	}{
+		{name: "observe_only", breachLevel: "none", consecutive: "0", qualityGateAction: "observe_only", expectAction: "observe_only", expectFailGate: false},
+		{name: "pause_rollout", breachLevel: "moderate", consecutive: "1", qualityGateAction: "pause_rollout", expectAction: "pause_rollout", expectFailGate: false},
+		{name: "rollback_required", breachLevel: "critical", consecutive: "3", qualityGateAction: "rollback_required", expectAction: "rollback_required", expectFailGate: false},
+		{name: "contract_mismatch", breachLevel: "moderate", consecutive: "1", qualityGateAction: "observe_only", expectAction: "pause_rollout", expectFailGate: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workDir := t.TempDir()
+			qualityCmd := "printf 'QUALITY_GATE_RESULT=allow\nQUALITY_GATE_CATEGORY=quality_gate\nQUALITY_GATE_REASON=ok\nQUALITY_GATE_FIX_HINT=n/a\nQUALITY_GATE_RELEASE_DECISION=allow\nQUALITY_GATE_RELEASE_READINESS_ROLLBACK_CANDIDATE=stable-slo\nQUALITY_GATE_DRILL_SUCCESS_RATE=1.0\nQUALITY_GATE_DRILL_ROLLBACK_P95_MS=100\nQUALITY_GATE_SLO_MATRIX_ACTION=" + tc.qualityGateAction + "\n'"
+			output, err := runDeliveryPipeline(t, map[string]string{
+				"DELIVERY_PIPELINE_WORK_DIR":                 workDir,
+				"DELIVERY_PIPELINE_QUALITY_GATE_CMD":         qualityCmd,
+				"DELIVERY_PIPELINE_DRY_RUN_CMD":              "printf 'DRY_RUN_OUTCOME=allow\nDRY_RUN_REASON=ok\nDRY_RUN_TRACE_KEY=trace-slo\n'",
+				"ONCALL_APPROVAL_LEVEL":                      "observe_only",
+				"DELIVERY_PIPELINE_SLO_BREACH_LEVEL":         tc.breachLevel,
+				"DELIVERY_PIPELINE_SLO_CONSECUTIVE_BREACHES": tc.consecutive,
+			})
+			if err != nil {
+				t.Fatalf("expected completed run: %v output=%s", err, output)
+			}
+			if !strings.Contains(output, "DELIVERY_PIPELINE_SLO_MATRIX_ACTION="+tc.expectAction) {
+				t.Fatalf("expected slo matrix action %s, output=%s", tc.expectAction, output)
+			}
+			if tc.expectFailGate && !strings.Contains(output, "DELIVERY_PIPELINE_GATE_DRILL_ROLLBACK_STATUS=fail") {
+				t.Fatalf("expected drill gate fail on mismatch, output=%s", output)
+			}
+		})
 	}
 }
 

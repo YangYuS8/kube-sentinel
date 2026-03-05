@@ -29,6 +29,10 @@
 - 发布就绪摘要必须包含：`actionType/riskLevel/strategyMode/circuitTier/rollbackCandidate/openIncidents/recentDrillScore`
 - 值班模板映射必须覆盖：`allow/degrade/block`，并输出对应 runbook 与审批触发点
 - 人工覆盖触发时必须输出审计证据：`operatorOverride.by/from/to/reason/at`
+- pilot/cutover 必须输出状态机字段：`DELIVERY_PIPELINE_PILOT_STATE_CURRENT`、`DELIVERY_PIPELINE_PILOT_STATE_TARGET`、`DELIVERY_PIPELINE_PILOT_STATE_NEXT`
+- pilot/cutover 必须输出批次与回退证据：`DELIVERY_PIPELINE_PILOT_BATCH`、`DELIVERY_PIPELINE_ROLLBACK_EVIDENCE`
+- cutover 决策包必须包含最小字段：`decision/failureCategory/pilotBatch/rollbackTarget/traceKey/approvalLevel/timestamp`
+- 值班交接字段必须齐备：`handoffOwner/approvalLevel/traceKey/rollbackCommandRef/handoffTimestamp`
 
 ## 失败路径
 
@@ -43,3 +47,7 @@
 - 恢复条件未满足时即使检查项通过也必须阻断放量（`QUALITY_GATE_RECOVERY_READY=false`）
 - 兼容性分类非法、迁移路径缺失或高风险未审批时必须阻断放量
 - API/CRD/Helm 任一约束未同步时必须阻断 CI 与质量门禁
+- 非法状态迁移（如 `pilot_prepare -> cutover_done`）必须阻断并输出 `invalid_stage_transition`
+- pilot 观察窗口未完成时禁止 cutover
+- SLO 动作语义不一致（质量门禁/运行门禁/决策包）时必须阻断并输出 `slo_threshold_contract_mismatch`
+- 命中自动回退触发条件时必须输出 `cutover_auto_rollback`

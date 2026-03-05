@@ -171,6 +171,24 @@ emit_go_live_fields() {
   echo "QUALITY_GATE_GO_LIVE_ROLLOUT_RECOMMENDATION=${recommendation}"
 }
 
+emit_pilot_cutover_fields() {
+  local decision="$(normalize_outcome "$1")"
+  local pilot_precheck_status="${QUALITY_GATE_PILOT_PRECHECK_STATUS:-pass}"
+  local pilot_batch="${QUALITY_GATE_PILOT_BATCH:-1}"
+  local cutover_recommendation="hold"
+  local slo_matrix_action="${QUALITY_GATE_SLO_MATRIX_ACTION:-observe_only}"
+
+  if [[ "$decision" == "allow" ]]; then
+    cutover_recommendation="proceed"
+  fi
+
+  echo "QUALITY_GATE_PILOT_PRECHECK_STATUS=${pilot_precheck_status}"
+  echo "QUALITY_GATE_PILOT_BATCH=${pilot_batch}"
+  echo "QUALITY_GATE_CUTOVER_DECISION=${decision}"
+  echo "QUALITY_GATE_CUTOVER_RECOMMENDATION=${cutover_recommendation}"
+  echo "QUALITY_GATE_SLO_MATRIX_ACTION=${slo_matrix_action}"
+}
+
 assert_incident_level_mapping() {
   local outcome="$(normalize_outcome "$1")"
   local incident_level="$2"
@@ -291,6 +309,7 @@ print_failure() {
   emit_api_contract_fields
   emit_release_readiness_fields
   emit_go_live_fields "$outcome" "$category" "$fix_hint"
+  emit_pilot_cutover_fields "$outcome"
   persist_quality_gate_evidence "block" "$category" "$reason" "$fix_hint"
 }
 
@@ -452,4 +471,5 @@ emit_slo_fields "allow"
 emit_api_contract_fields
 emit_release_readiness_fields
 emit_go_live_fields "allow" "none" "n/a"
+emit_pilot_cutover_fields "allow"
 persist_quality_gate_evidence "allow" "quality_gate" "all_checks_passed" "n/a"
