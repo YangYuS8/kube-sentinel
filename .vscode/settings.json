@@ -38,6 +38,8 @@
     "printenv": true,
     "kubectl create": true,
     "kubectl patch": true,
-    "kubectl rollout": true
+    "kubectl rollout": true,
+    "kubectl cluster-info": true,
+    "kubectl -n kube-sentinel-system": true
   }
 }

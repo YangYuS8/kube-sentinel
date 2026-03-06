@@ -22,7 +22,7 @@
 - `status/event/metric/audit` 可通过 `correlationKey` 关联
 - 自动写动作前必须生成 `status.lastSnapshotId`
 - 回滚失败时必须记录 `status.snapshotRestoreResult`（`success` 或 `failed`）
-- 演练脚本必须覆盖 `allow` / `block` / `degrade` 三类门禁结果
+- 本地 smoke 脚本必须覆盖默认 `block` 与单次放宽后的 `allow` 路径；`degrade` 语义继续由单元测试与发布门禁校验覆盖
 - 演练脚本必须输出 incident 证据：级别、恢复条件、runbook 标识
 - 演练脚本必须输出灰度闭环证据：`rollout.canaryStable`、`rollout.rollbackHit`、`rollout.tuningApproved`、`rollout.recoveryObserved`
 - 演练脚本必须校验复盘字段：`postmortem.breachReason`、`postmortem.mitigationAction`、`postmortem.thresholdDecision`、`postmortem.observationPlan`
@@ -45,6 +45,7 @@
 - 预提交与 CI 门禁语义不一致时必须阻断验收
 - 门禁语义与 SLO 治理语义不一致时必须阻断验收
 - 恢复条件未满足时即使检查项通过也必须阻断放量（`QUALITY_GATE_RECOVERY_READY=false`）
+- 本地 smoke 中对 `blastRadius` 的放宽必须仅作用于当前 `HealingRequest`，不得回写 chart 默认值或生产配置
 - 兼容性分类非法、迁移路径缺失或高风险未审批时必须阻断放量
 - API/CRD/Helm 任一约束未同步时必须阻断 CI 与质量门禁
 - 非法状态迁移（如 `pilot_prepare -> cutover_done`）必须阻断并输出 `invalid_stage_transition`

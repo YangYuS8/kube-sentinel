@@ -33,13 +33,13 @@ func main() {
 func run() error {
 	var metricsAddr string
 	var probeAddr string
-	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
-	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	flag.StringVar(&metricsAddr, "metrics-bind-address", envOrDefault("KUBE_SENTINEL_METRICS_BIND_ADDRESS", ":8080"), "The address the metric endpoint binds to.")
+	flag.StringVar(&probeAddr, "health-probe-bind-address", envOrDefault("KUBE_SENTINEL_HEALTH_PROBE_BIND_ADDRESS", ":8081"), "The address the probe endpoint binds to.")
 	flag.Parse()
 
 	setupLog := ctrl.Log.WithName("setup")
-	webhookAddr := ":8090"
-	webhookPath := "/alertmanager/webhook"
+	webhookAddr := envOrDefault("KUBE_SENTINEL_WEBHOOK_BIND_ADDRESS", ":8090")
+	webhookPath := envOrDefault("KUBE_SENTINEL_WEBHOOK_PATH", "/alertmanager/webhook")
 
 	setupLog.Info("starting kube-sentinel manager", "metricsAddr", metricsAddr, "probeAddr", probeAddr, "webhookAddr", webhookAddr, "webhookPath", webhookPath)
 
@@ -98,4 +98,12 @@ func run() error {
 	}
 
 	return nil
+}
+
+func envOrDefault(key, fallback string) string {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+	return value
 }

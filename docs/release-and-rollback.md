@@ -5,6 +5,7 @@
 - 首发只开放 Deployment 的 L1 最小影响动作，默认动作是 `rollout restart`。
 - StatefulSet 在首发阶段仍按只读评估处理，不纳入自动写路径验收。
 - Deployment 的 L2/L3 自动升级与复杂发布门禁不属于首发范围；L1 失败时应输出阻断证据并转人工介入。
+- 测试环境统一入口使用 [scripts/install-minimal.sh](scripts/install-minimal.sh) 与 [scripts/dev-local-loop.sh](scripts/dev-local-loop.sh)；它们面向联调与 minikube，不直接等同生产安装基线。
 - 首发灰度必须优先验证：Webhook 接入幂等、维护窗口阻断、速率限制、爆炸半径、熔断、写前快照失败阻断。
 - 首发回滚优先级：先关闭自动写路径，再保留只读评估与审计链路，最后根据最近快照与审计记录执行人工恢复。
 
@@ -13,7 +14,7 @@
 0. 合并前必须执行统一交付门禁：`make quality-gate`。
 1. 首先在低风险命名空间启用 webhook 接入与对象级熔断。
 2. 校验运行参数为声明式配置驱动（幂等窗口、限频、爆炸半径、熔断阈值）。
-3. 执行主线A演练脚本，确认三项强断言通过。
+3. 本地联调优先执行 `bash ./scripts/drill-runtime-closed-loop.sh default`，确认默认阻断路径与单次放宽后的成功路径都通过。
 4. 观察关键指标（失败率、回滚次数、熔断次数）24 小时。
 5. 通过配置开关启用域级熔断。
 6. 校验 K8s Event 与审计记录可通过 correlation key 串联。
@@ -178,6 +179,13 @@
 8. 清理审批注解 `kube-sentinel.io/statefulset-approved`，避免误触发下一轮自动动作。
 9. 将 `statefulSetPolicy.l2RollbackEnabled=false`，回退到 Phase 2（仅 L1 受控 + L3 人工）模式。
 10. 将 `snapshotPolicy.enabled=false`（或回退控制器版本）并清理历史快照对象，恢复到保守只读模式。
+
+## 本地与生产 blast radius 约定
+
+- 本地 minikube 或单节点测试环境通常 Pod 基数过小，默认 `blastRadius.maxPodPercentage=10` 会先阻断自动写路径，这属于预期行为。
+- 本地 smoke 允许只对当前 `HealingRequest` 临时 patch 更宽松的 `spec.blastRadius.maxPodPercentage`，用于验证 `PendingVerify -> Completed` 成功闭环。
+- 不允许把本地 smoke 中的临时阈值写回 chart 默认值、脚本默认值或生产环境配置。
+- smoke 完成后应保留默认保守值作为正式环境基线，并在文档或审计中说明本次临时放宽仅用于联调。
 
 ## 应急步骤
 

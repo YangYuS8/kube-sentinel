@@ -94,7 +94,38 @@ make lint
 make quality-gate
 ```
 
-### 2. 准备本地集群上下文
+### 2. 构建最小安装入口
+
+仓库现在提供了最小镜像构建与测试环境安装入口：
+
+```bash
+bash ./scripts/install-minimal.sh
+```
+
+默认行为：
+
+- 自动构建本地镜像 `kube-sentinel/controller:latest`
+- 当前 context 是 minikube 时，自动执行 `minikube image load`
+- 安装 `HealingRequest` CRD
+- 部署 `kube-sentinel` ServiceAccount、RBAC、Deployment 与 Service
+- 输出下一步连接 manager 与执行 smoke 的命令提示
+
+常用覆盖项：
+
+```bash
+KUBE_SENTINEL_NAMESPACE=kube-sentinel-system \
+KUBE_SENTINEL_IMAGE=example.local/kube-sentinel:test \
+KUBE_SENTINEL_BUILD_IMAGE=false \
+bash ./scripts/install-minimal.sh
+```
+
+如果你只想查看渲染后的清单，不实际写入集群：
+
+```bash
+KUBE_SENTINEL_INSTALL_DRY_RUN=true bash ./scripts/install-minimal.sh
+```
+
+### 3. 准备本地集群上下文
 
 如果你使用 minikube，本地启动前先确认当前 kube context 已经指向它：
 
@@ -139,7 +170,37 @@ minikube start --driver=podman \
 
 如果这些基础组件还没起来，先不要继续验证 Kube-Sentinel，本地闭环一定会出现误报。
 
-### 3. 安装 CRD
+### 4. 本地开发回路
+
+统一本地入口：
+
+```bash
+bash ./scripts/dev-local-loop.sh check
+```
+
+这个入口会统一完成：
+
+- kube context 与 apiserver 连通性检查
+- `kube-system` 基础组件就绪检查
+- `HealingRequest` CRD 缺失时自动补装
+- `default/demo-app` demo workload 缺失时自动补齐
+- 输出后续运行本地 manager 或连接集群 manager 的下一步命令
+
+本地直接运行 manager：
+
+```bash
+bash ./scripts/dev-local-loop.sh run-local
+```
+
+如果 `8080`、`8081` 或 `8090` 端口被占用，这个入口会直接阻断并提示修复。
+
+如果控制器已经以 Pod 形式运行在集群里，可以复用同一个入口连接集群中的 Service：
+
+```bash
+bash ./scripts/dev-local-loop.sh connect-cluster
+```
+
+### 5. 安装 CRD
 
 在启动 manager 或发送 webhook 之前，先安装 HealingRequest CRD：
 
@@ -150,7 +211,9 @@ kubectl get crd healingrequests.kubesentinel.io
 
 如果缺少这一步，Webhook 虽然可能接收到请求，但 `HealingRequest` 无法落库，闭环验证会直接失败。
 
-### 4. 启动控制器
+如果你已经执行了 [scripts/install-minimal.sh](scripts/install-minimal.sh)，这一节通常已经由统一入口完成。
+
+### 6. 启动控制器
 
 Kube-Sentinel 当前通过 controller-runtime manager 运行，并在本地暴露以下端口：
 
@@ -183,7 +246,7 @@ registered health and readiness checks
 
 如果 manager 已经启动成功，但随后看到类似 `workload default/demo-app not found as Deployment or StatefulSet` 的日志，这表示控制器已经开始处理某个 `HealingRequest`，只是告警指向的目标工作负载在集群中不存在。
 
-### 5. 发送一个测试告警
+### 7. 发送一个测试告警
 
 Webhook 路径：
 
@@ -239,7 +302,7 @@ curl -X POST http://127.0.0.1:8090/alertmanager/webhook \
   }'
 ```
 
-### 6. 查看生成的 HealingRequest
+### 8. 查看生成的 HealingRequest
 
 Receiver 会将告警映射成 `HealingRequest`。对象名默认形如：
 
@@ -272,12 +335,33 @@ kubectl get healingrequest hr-demo-app -n default -o yaml
 
 默认 `blastRadius.maxPodPercentage=10` 对本地小集群通常过严。比如默认 namespace 只有 4 个 Pod，而目标 Deployment 有 3 个副本时，影响比例是 $75\%$，一定会被门禁阻断。这不是控制器异常，而是安全策略按设计生效。
 
-本地 smoke 建议：
+统一本地 smoke 入口：
+
+```bash
+bash ./scripts/drill-runtime-closed-loop.sh default
+```
+
+这个脚本会固定执行两条路径：
+
+- 默认保守配置下，验证 `HealingRequest` 创建与 `gate_blocked` / `blast radius exceeded` 阻断语义
+- 只对当前 `HealingRequest` 临时放宽 `spec.blastRadius.maxPodPercentage` 与 soak 配置，验证 `PendingVerify -> Completed` 成功闭环
+
+默认情况下，脚本会为每次运行创建一个临时 smoke Deployment，并在结束时自动清理，避免重复执行时命中上一轮对象的幂等窗口。若你想保留现场供排查，可设置 `KUBE_SENTINEL_KEEP_SMOKE_RESOURCES=true`。
+
+如果 controller 是以 Pod 形式运行在集群里，可以先开一个终端执行：
+
+```bash
+bash ./scripts/dev-local-loop.sh connect-cluster
+```
+
+然后在另一个终端执行 smoke。
+
+本地 smoke 约定：
 
 - 使用更多基础 Pod 拉高总量，或者
-- 临时把验证对象的 `spec.blastRadius.maxPodPercentage` 提高到适合本地环境的值，例如 `100`
+- 仅临时把当前验证对象的 `spec.blastRadius.maxPodPercentage` 提高到适合本地环境的值，例如 `100`
 
-联调完成后应恢复更保守的阈值。
+联调完成后应恢复更保守的阈值。不要把本地 smoke 中的放宽值抄回 [charts/kube-sentinel/values.yaml](charts/kube-sentinel/values.yaml) 或正式环境默认配置。
 
 ## 首发行为说明
 
@@ -310,6 +394,15 @@ Helm 默认值位于 [charts/kube-sentinel/values.yaml](charts/kube-sentinel/val
 - `circuitBreaker.domainFailureThreshold: 10`
 - `circuitBreaker.cooldownMinutes: 10`
 - `snapshotPolicy.enabled: true`
+
+manager 运行时也支持通过环境变量加载最小监听配置：
+
+- `KUBE_SENTINEL_METRICS_BIND_ADDRESS`
+- `KUBE_SENTINEL_HEALTH_PROBE_BIND_ADDRESS`
+- `KUBE_SENTINEL_WEBHOOK_BIND_ADDRESS`
+- `KUBE_SENTINEL_WEBHOOK_PATH`
+
+[config/install/kube-sentinel.yaml](config/install/kube-sentinel.yaml) 使用这组环境变量把安装清单中的默认监听地址显式传给控制器。
 
 Schema 约束位于 [charts/kube-sentinel/values.schema.json](charts/kube-sentinel/values.schema.json)。
 
@@ -410,7 +503,7 @@ ss -ltnp | grep -E ':8080|:8081|:8090'
 
 ## 当前局限
 
-- 当前没有完整的生产安装指南
+- 当前提供的是测试环境最小安装入口，不是完整生产安装基线
 - 当前 README 以首发闭环为中心，不覆盖后续所有 roadmap 能力
 - 当前首发版本的重点是“Deployment 安全 L1”，不是最终多级自愈终态
 
