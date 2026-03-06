@@ -30,6 +30,14 @@
     "kubectl config": true,
     "kubectl get": true,
     "kubectl apply": true,
-    "kubectl -n default": true
+    "kubectl -n default": true,
+    "fastfetch": true,
+    "minikube": true,
+    "kubectl describe": true,
+    "podman": true,
+    "printenv": true,
+    "kubectl create": true,
+    "kubectl patch": true,
+    "kubectl rollout": true
   }
 }
