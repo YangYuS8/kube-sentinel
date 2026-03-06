@@ -3,8 +3,10 @@ package controllers
 import (
 	"context"
 
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -25,6 +27,7 @@ func (r *HealingRequestReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if err := r.Get(ctx, req.NamespacedName, &resource); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
+	originalStatus := resource.Status
 	if r.Orchestrator == nil {
 		r.Orchestrator = &healing.Orchestrator{
 			Adapter:          healing.NewDeploymentAdapter(r.Client),
@@ -35,14 +38,14 @@ func (r *HealingRequestReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			K8sEventRecorder: r.Recorder,
 		}
 	}
-	if err := r.Orchestrator.Process(ctx, &resource); err != nil {
-		_ = r.Status().Update(ctx, &resource)
-		return ctrl.Result{}, nil
+	result, err := r.Orchestrator.Process(ctx, &resource)
+	if patchErr := r.patchStatus(ctx, req.NamespacedName, originalStatus, resource.Status); patchErr != nil {
+		return ctrl.Result{}, patchErr
 	}
-	if err := r.Status().Update(ctx, &resource); err != nil {
-		return ctrl.Result{}, err
+	if err != nil {
+		return ctrl.Result{RequeueAfter: result.RequeueAfter}, nil
 	}
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: result.RequeueAfter}, nil
 }
 
 func (r *HealingRequestReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -52,4 +55,23 @@ func (r *HealingRequestReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&ksv1alpha1.HealingRequest{}).
 		Complete(r)
+}
+
+func (r *HealingRequestReconciler) patchStatus(ctx context.Context, key client.ObjectKey, original, desired ksv1alpha1.HealingRequestStatus) error {
+	if apiequality.Semantic.DeepEqual(original, desired) {
+		return nil
+	}
+
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		var latest ksv1alpha1.HealingRequest
+		if err := r.Get(ctx, key, &latest); err != nil {
+			return client.IgnoreNotFound(err)
+		}
+		if apiequality.Semantic.DeepEqual(latest.Status, desired) {
+			return nil
+		}
+		base := latest.DeepCopyObject().(*ksv1alpha1.HealingRequest)
+		latest.Status = desired
+		return r.Status().Patch(ctx, &latest, client.MergeFrom(base))
+	})
 }

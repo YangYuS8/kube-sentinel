@@ -3,6 +3,35 @@ set -euo pipefail
 
 NAMESPACE="${1:-default}"
 
+require_binary() {
+  local name="$1"
+  if ! command -v "$name" >/dev/null 2>&1; then
+    echo "ASSERTION FAILED: missing required binary: $name"
+    exit 1
+  fi
+}
+
+ensure_prerequisites() {
+  require_binary kubectl
+  require_binary curl
+
+  if ! kubectl cluster-info >/dev/null 2>&1; then
+    echo "ASSERTION FAILED: kubectl 当前无法访问集群"
+    exit 1
+  fi
+
+  if ! kubectl get crd healingrequests.kubesentinel.io >/dev/null 2>&1; then
+    echo "INFO: 安装 HealingRequest CRD"
+    kubectl apply -f config/crd/_healingrequests.yaml >/dev/null
+  fi
+
+  local pod_count
+  pod_count=$(kubectl -n "$NAMESPACE" get pods --no-headers 2>/dev/null | wc -l | tr -d ' ')
+  if [[ -n "$pod_count" && "$pod_count" -lt 10 ]]; then
+    echo "INFO: namespace $NAMESPACE 只有 $pod_count 个 Pod，默认 blast radius 很可能阻断本地 smoke；必要时先调高目标 HealingRequest 的 spec.blastRadius.maxPodPercentage。"
+  fi
+}
+
 classify_outcome() {
   local phase="${1:-}"
   local block_reason="${2:-}"
@@ -189,6 +218,7 @@ assert_oncall_template_for_outcome() {
 }
 
 echo "[1/4] 触发 Deployment 告警事件"
+ensure_prerequisites
 kubectl -n "$NAMESPACE" port-forward svc/kube-sentinel 8090:8090 >/tmp/kube-sentinel-pf.log 2>&1 &
 PF_PID=$!
 trap 'kill $PF_PID >/dev/null 2>&1 || true' EXIT

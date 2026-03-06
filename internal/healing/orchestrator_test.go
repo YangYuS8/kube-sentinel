@@ -137,7 +137,7 @@ func TestOrchestratorIdempotent(t *testing.T) {
 	req.Status.Phase = ksv1alpha1.PhaseCompleted
 	req.Status.ObservedGeneration = 1
 	o := &Orchestrator{Adapter: fakeAdapter{supports: true}, Snapshotter: &MemorySnapshotter{}}
-	if err := o.Process(context.Background(), req); err != nil {
+	if _, err := o.Process(context.Background(), req); err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
 }
@@ -146,7 +146,7 @@ func TestOrchestratorUnsupportedKind(t *testing.T) {
 	req := newReq()
 	req.Spec.Workload.Kind = "Job"
 	o := &Orchestrator{Adapter: fakeAdapter{supports: true}, Snapshotter: &MemorySnapshotter{}}
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected unsupported kind error")
 	}
 }
@@ -160,7 +160,7 @@ func TestOrchestratorDeploymentL1FailureBlocksWithoutEscalation(t *testing.T) {
 		Metrics:     &observability.Metrics{},
 		Now:         func() time.Time { return time.Unix(100, 0) },
 	}
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected deployment l1 failure")
 	}
 	if req.Status.Phase != ksv1alpha1.PhaseBlocked {
@@ -185,7 +185,7 @@ func TestOrchestratorDeploymentL1FailureDoesNotAttemptRollback(t *testing.T) {
 		Snapshotter: &MemorySnapshotter{},
 		Now:         func() time.Time { return time.Unix(120, 0) },
 	}
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected deployment l1 failure")
 	}
 	if rollbackCalls != 0 {
@@ -209,7 +209,7 @@ func TestOrchestratorCorrelationAndEvent(t *testing.T) {
 		AuditSink:   audits,
 		EventSink:   events,
 	}
-	if err := o.Process(context.Background(), req); err != nil {
+	if _, err := o.Process(context.Background(), req); err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
 	if req.Status.CorrelationKey != "trace-1" {
@@ -235,7 +235,7 @@ func TestOrchestratorGateUsesConfiguredBlastRadius(t *testing.T) {
 		Snapshotter: &MemorySnapshotter{},
 		AuditSink:   audits,
 	}
-	err := o.Process(context.Background(), req)
+	_, err := o.Process(context.Background(), req)
 	if err == nil {
 		t.Fatalf("expected gate blocked due to blast radius config")
 	}
@@ -262,7 +262,7 @@ func TestOrchestratorDeploymentSnapshotFailureEmitsAuditAndEvent(t *testing.T) {
 		EventSink:   events,
 		Metrics:     metrics,
 	}
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected snapshot failure")
 	}
 	if req.Status.BlockReasonCode != "snapshot_failed" {
@@ -292,14 +292,14 @@ func TestOrchestratorBreakerUsesConfiguredThreshold(t *testing.T) {
 		Snapshotter: &MemorySnapshotter{},
 		Now:         func() time.Time { return time.Unix(1000, 0) },
 	}
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected first process to fail on deployment l1 action")
 	}
 	req2 := newReq()
 	req2.Spec.CircuitBreaker.ObjectFailureThreshold = 1
 	req2.Spec.CircuitBreaker.DomainFailureThreshold = 100
 	req2.Spec.CircuitBreaker.CooldownMinutes = 10
-	if err := o.Process(context.Background(), req2); err == nil {
+	if _, err := o.Process(context.Background(), req2); err == nil {
 		t.Fatalf("expected second process to be blocked by breaker")
 	}
 	if !req2.Status.CircuitBreaker.ObjectOpen && req2.Status.CircuitBreaker.OpenReason == "" {
@@ -320,14 +320,14 @@ func TestOrchestratorPendingVerifyAndSuppressed(t *testing.T) {
 		Snapshotter: &MemorySnapshotter{},
 		Now:         func() time.Time { return now },
 	}
-	if err := o.Process(context.Background(), req); err != nil {
+	if _, err := o.Process(context.Background(), req); err != nil {
 		t.Fatalf("first process err: %v", err)
 	}
 	if req.Status.Phase != ksv1alpha1.PhasePendingVerify {
 		t.Fatalf("expected pending verify phase, got %s", req.Status.Phase)
 	}
 	req.Annotations["kube-sentinel.io/alert-status"] = "resolved"
-	if err := o.Process(context.Background(), req); err != nil {
+	if _, err := o.Process(context.Background(), req); err != nil {
 		t.Fatalf("second process err: %v", err)
 	}
 	if req.Status.Phase != ksv1alpha1.PhaseSuppressed {
@@ -351,7 +351,7 @@ func TestOrchestratorNamespaceBudgetBlocks(t *testing.T) {
 	}
 	req.Status.PendingSince = now.Format(time.RFC3339)
 	req.Status.StableSampleCount = 3
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected namespace budget block")
 	}
 	if req.Status.ShadowAction == "" || req.Status.NamespaceBlockRate == 0 {
@@ -370,7 +370,7 @@ func TestOrchestratorDeploymentL1FailureIgnoresL2DependencyPath(t *testing.T) {
 	}
 	req.Status.PendingSince = now.Format(time.RFC3339)
 	req.Status.StableSampleCount = 3
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected deployment l1 failure")
 	}
 	if req.Status.Phase != ksv1alpha1.PhaseBlocked {
@@ -394,7 +394,7 @@ func TestOrchestratorDeploymentL1FailureMarksManualIntervention(t *testing.T) {
 		Metrics:     &observability.Metrics{},
 		Now:         func() time.Time { return now },
 	}
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected deployment l1 failure")
 	}
 	if req.Status.Phase != ksv1alpha1.PhaseBlocked || req.Status.DeploymentL2Result != "skipped" {
@@ -420,7 +420,7 @@ func TestOrchestratorDeploymentL1FailureIgnoresHealthyCandidateSearch(t *testing
 		Snapshotter: &MemorySnapshotter{},
 		Now:         func() time.Time { return now },
 	}
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected deployment l1 failure")
 	}
 	if req.Status.Phase != ksv1alpha1.PhaseBlocked || req.Status.DeploymentL2Result != "skipped" {
@@ -449,7 +449,7 @@ func TestOrchestratorDeploymentL2ControlsDoNotOverrideL1Failure(t *testing.T) {
 		},
 		Now: func() time.Time { return now },
 	}
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected deployment l1 failure")
 	}
 	if req.Status.BlockReasonCode != "deployment_l1_failed" {
@@ -473,7 +473,7 @@ func TestOrchestratorDeploymentL1FailureIgnoresExistingL2IdempotencyHistory(t *t
 		Now:         func() time.Time { return now },
 	}
 	o.actionHistory = map[string][]time.Time{req.Spec.Workload.Namespace + "/" + req.Spec.Workload.Name + "/l2": {now.Add(-time.Minute)}}
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected deployment l1 failure")
 	}
 	if req.Status.BlockReasonCode != "deployment_l1_failed" {
@@ -493,7 +493,7 @@ func TestOrchestratorDeploymentReleaseGateMetricsDoNotBlockMVP(t *testing.T) {
 			DeploymentStageBlocks: 100,
 		},
 	}
-	if err := o.Process(context.Background(), req); err != nil {
+	if _, err := o.Process(context.Background(), req); err != nil {
 		t.Fatalf("expected deployment mvp to ignore release gate metrics: %v", err)
 	}
 	if req.Status.Phase != ksv1alpha1.PhaseCompleted {
@@ -515,21 +515,21 @@ func TestOrchestratorSoakBoundary(t *testing.T) {
 		Snapshotter: &MemorySnapshotter{},
 		Now:         func() time.Time { return now },
 	}
-	if err := o.Process(context.Background(), req); err != nil {
+	if _, err := o.Process(context.Background(), req); err != nil {
 		t.Fatalf("first process err: %v", err)
 	}
 	if req.Status.Phase != ksv1alpha1.PhasePendingVerify {
 		t.Fatalf("expected pending verify")
 	}
 	now = start.Add(30 * time.Second)
-	if err := o.Process(context.Background(), req); err != nil {
+	if _, err := o.Process(context.Background(), req); err != nil {
 		t.Fatalf("second process err: %v", err)
 	}
 	if req.Status.Phase != ksv1alpha1.PhasePendingVerify {
 		t.Fatalf("expected still pending verify before soak boundary")
 	}
 	now = start.Add(3 * time.Minute)
-	if err := o.Process(context.Background(), req); err != nil {
+	if _, err := o.Process(context.Background(), req); err != nil {
 		t.Fatalf("third process err: %v", err)
 	}
 	if req.Status.Phase == ksv1alpha1.PhasePendingVerify {
@@ -546,7 +546,7 @@ func TestOrchestratorNamespaceBudgetFallbackForSmallNamespace(t *testing.T) {
 		Adapter:     fakeAdapter{supports: true, totalWorkloads: 3, unhealthyWorkloads: 2},
 		Snapshotter: &MemorySnapshotter{},
 	}
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected small namespace fallback budget block")
 	}
 }
@@ -563,7 +563,7 @@ func TestOrchestratorEmergencyBypassOnce(t *testing.T) {
 		Adapter:     fakeAdapter{supports: true, revisions: []RevisionRecord{{Revision: "2", UnixTime: 2, Healthy: true}}, totalWorkloads: 10, unhealthyWorkloads: 4},
 		Snapshotter: &MemorySnapshotter{},
 	}
-	if err := o.Process(context.Background(), req); err != nil {
+	if _, err := o.Process(context.Background(), req); err != nil {
 		t.Fatalf("expected emergency bypass to allow processing: %v", err)
 	}
 	if req.Status.EmergencyAttempts != 1 {
@@ -574,7 +574,7 @@ func TestOrchestratorEmergencyBypassOnce(t *testing.T) {
 	req2.Spec.EmergencyTry = req.Spec.EmergencyTry
 	req2.Status.EmergencyAttempts = 1
 	req2.Annotations = map[string]string{"kube-sentinel.io/criticality": "high"}
-	if err := o.Process(context.Background(), req2); err == nil {
+	if _, err := o.Process(context.Background(), req2); err == nil {
 		t.Fatalf("expected second emergency attempt to be blocked")
 	}
 }
@@ -589,7 +589,7 @@ func TestOrchestratorShadowActionEventAuditConsistency(t *testing.T) {
 		EventSink:   events,
 		AuditSink:   audits,
 	}
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected blocked by namespace budget")
 	}
 	if req.Status.ShadowAction == "" {
@@ -623,7 +623,7 @@ func TestOrchestratorReleaseReadinessBlockWhenMissingRollbackCandidate(t *testin
 		AuditSink:   audits,
 		Now:         func() time.Time { return time.Unix(120, 0) },
 	}
-	if err := o.Process(context.Background(), req); err != nil {
+	if _, err := o.Process(context.Background(), req); err != nil {
 		t.Fatalf("expected process to succeed with audit evidence: %v", err)
 	}
 	if req.Status.GateOutcome != "block" {
@@ -656,7 +656,7 @@ func TestOrchestratorReleaseReadinessOperatorOverrideTracked(t *testing.T) {
 		AuditSink:   audits,
 		Snapshotter: &MemorySnapshotter{},
 	}
-	if err := o.Process(context.Background(), req); err != nil {
+	if _, err := o.Process(context.Background(), req); err != nil {
 		t.Fatalf("expected process succeed: %v", err)
 	}
 	if metrics.ReleaseReadinessOverrides == 0 {
@@ -685,7 +685,7 @@ func TestOrchestratorStatefulSetReadOnlyBlocked(t *testing.T) {
 	}
 	req.Status.PendingSince = now.Format(time.RFC3339)
 	req.Status.StableSampleCount = 3
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected statefulset readonly block")
 	}
 	if req.Status.WorkloadCapability != "read-only" {
@@ -732,7 +732,7 @@ func TestOrchestratorStatefulSetControlledActionAuthorized(t *testing.T) {
 		}},
 		Metrics: &observability.Metrics{},
 	}
-	if err := o.Process(context.Background(), req); err != nil {
+	if _, err := o.Process(context.Background(), req); err != nil {
 		t.Fatalf("expected statefulset controlled action success: %v", err)
 	}
 	if req.Status.Phase != ksv1alpha1.PhaseCompleted {
@@ -778,7 +778,7 @@ func TestOrchestratorStatefulSetControlledActionFailureFreeze(t *testing.T) {
 		Metrics: &observability.Metrics{},
 		Now:     func() time.Time { return now },
 	}
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected statefulset controlled action failure")
 	}
 	if req.Status.StatefulSetFreezeState != "frozen" || req.Status.StatefulSetFreezeUntil == "" {
@@ -793,7 +793,7 @@ func TestOrchestratorStatefulSetControlledActionFailureFreeze(t *testing.T) {
 	req2.Annotations = req.Annotations
 	req2.Status.StatefulSetFreezeState = "frozen"
 	req2.Status.StatefulSetFreezeUntil = now.Add(2 * time.Minute).Format(time.RFC3339)
-	if err := o.Process(context.Background(), req2); err == nil {
+	if _, err := o.Process(context.Background(), req2); err == nil {
 		t.Fatalf("expected frozen window block")
 	}
 	if req2.Status.BlockReasonCode != "statefulset_frozen" {
@@ -822,7 +822,7 @@ func TestOrchestratorStatefulSetL2RollbackSuccessAfterL1Failure(t *testing.T) {
 		RuntimeInputProvider: fakeRuntimeInputProvider{input: RuntimeInput{AffectedPods: 1, ClusterPods: 100, TotalWorkloads: 10, UnhealthyWorkloads: 1}},
 		Metrics:              &observability.Metrics{},
 	}
-	if err := o.Process(context.Background(), req); err != nil {
+	if _, err := o.Process(context.Background(), req); err != nil {
 		t.Fatalf("expected l2 rollback success after l1 failure: %v", err)
 	}
 	if req.Status.Phase != ksv1alpha1.PhaseCompleted || req.Status.StatefulSetL2Result != "success" {
@@ -853,7 +853,7 @@ func TestOrchestratorStatefulSetL2DegradeWhenNoCandidate(t *testing.T) {
 		Snapshotter:          &MemorySnapshotter{},
 		RuntimeInputProvider: fakeRuntimeInputProvider{input: RuntimeInput{AffectedPods: 1, ClusterPods: 100, TotalWorkloads: 10, UnhealthyWorkloads: 1}},
 	}
-	if err := o.Process(context.Background(), req); err != nil {
+	if _, err := o.Process(context.Background(), req); err != nil {
 		t.Fatalf("expected l2 no-candidate degrade without hard error: %v", err)
 	}
 	if req.Status.Phase != ksv1alpha1.PhaseL3 || req.Status.StatefulSetL2Result != "degraded" {
@@ -884,7 +884,7 @@ func TestOrchestratorStatefulSetL2IdempotencyBlocked(t *testing.T) {
 		Now:                  func() time.Time { return now },
 	}
 	o.actionHistory = map[string][]time.Time{req.Spec.Workload.Namespace + "/" + req.Spec.Workload.Name + "/l2": {now.Add(-time.Minute)}}
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected l2 idempotency block")
 	}
 	if req.Status.BlockReasonCode != "statefulset_l2_idempotency_window" {
@@ -898,7 +898,7 @@ func TestOrchestratorSnapshotCreateFailureBlocks(t *testing.T) {
 		Adapter:     fakeAdapter{supports: true},
 		Snapshotter: &fakeSnapshotter{createErr: errors.New("snapshot backend unavailable")},
 	}
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected snapshot creation failure")
 	}
 	if req.Status.Phase != ksv1alpha1.PhaseBlocked {
@@ -933,7 +933,7 @@ func TestOrchestratorStatefulSetL2RollbackRestoreFailureEvidence(t *testing.T) {
 		},
 		Snapshotter: snapshotter,
 	}
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected l2 rollback failure")
 	}
 	if req.Status.StatefulSetFreezeState != "frozen" {
@@ -967,7 +967,7 @@ func TestOrchestratorStatefulSetAuthorizationFailure(t *testing.T) {
 			UnhealthyWorkloads: 1,
 		}},
 	}
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected authorization failure")
 	}
 	if req.Status.BlockReasonCode != "statefulset_authorization_failed" {
@@ -992,7 +992,7 @@ func TestOrchestratorStatefulSetGateBoundaries(t *testing.T) {
 			}},
 			Now: func() time.Time { return now },
 		}
-		if err := o.Process(context.Background(), req); err == nil {
+		if _, err := o.Process(context.Background(), req); err == nil {
 			t.Fatalf("expected maintenance window block")
 		}
 		if req.Status.BlockReasonCode != "gate_blocked" {
@@ -1018,7 +1018,7 @@ func TestOrchestratorStatefulSetGateBoundaries(t *testing.T) {
 			Now: func() time.Time { return now },
 		}
 		o.actionHistory = map[string][]time.Time{req.Spec.Workload.Namespace + "/" + req.Spec.Workload.Name: []time.Time{now.Add(-time.Minute)}}
-		if err := o.Process(context.Background(), req); err == nil {
+		if _, err := o.Process(context.Background(), req); err == nil {
 			t.Fatalf("expected rate limit block")
 		}
 		if req.Status.BlockReasonCode != "gate_blocked" {
@@ -1040,7 +1040,7 @@ func TestOrchestratorStatefulSetGateBoundaries(t *testing.T) {
 				UnhealthyWorkloads: 1,
 			}},
 		}
-		if err := o.Process(context.Background(), req); err == nil {
+		if _, err := o.Process(context.Background(), req); err == nil {
 			t.Fatalf("expected blast radius block")
 		}
 		if req.Status.BlockReasonCode != "gate_blocked" {
@@ -1058,7 +1058,7 @@ func TestOrchestratorObservabilityDegradedStillBlocksSafely(t *testing.T) {
 		EventSink:   nil,
 		AuditSink:   nil,
 	}
-	if err := o.Process(context.Background(), req); err == nil {
+	if _, err := o.Process(context.Background(), req); err == nil {
 		t.Fatalf("expected safe readonly block even when observability sinks are nil")
 	}
 	if req.Status.Phase != ksv1alpha1.PhaseBlocked {

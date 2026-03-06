@@ -112,7 +112,45 @@ kubectl cluster-info
 
 如果这里失败，`go run ./cmd/manager` 也会失败，因为 controller-runtime 在启动时就需要加载 Kubernetes client 配置。
 
-### 3. 启动控制器
+如果你在 Linux 上使用 `minikube + podman/cri-o`，并且宿主机访问外网依赖代理，需要特别注意两点：
+
+- 不要把节点内代理地址写成 `localhost`；对 minikube 节点而言，这会指向节点自身而不是宿主机。
+- 需要把宿主机可达的代理地址传给 minikube 启动环境，否则系统组件可能卡在 `ImagePullBackOff`，节点会一直 `NotReady`。
+
+示例：
+
+```bash
+export HTTP_PROXY=http://<host-reachable-proxy>:7890
+export HTTPS_PROXY=http://<host-reachable-proxy>:7890
+export NO_PROXY=127.0.0.1,localhost,10.96.0.0/12,10.244.0.0/16,.svc,.cluster.local
+
+minikube start --driver=podman \
+  --container-runtime=cri-o \
+  --embed-certs \
+  --docker-env HTTP_PROXY="$HTTP_PROXY" \
+  --docker-env HTTPS_PROXY="$HTTPS_PROXY" \
+  --docker-env NO_PROXY="$NO_PROXY"
+```
+
+启动后先确认：
+
+- `kubectl get nodes` 中节点状态为 `Ready`
+- `kubectl -n kube-system get pods` 中 `coredns`、网络插件、`storage-provisioner` 均为 `Running`
+
+如果这些基础组件还没起来，先不要继续验证 Kube-Sentinel，本地闭环一定会出现误报。
+
+### 3. 安装 CRD
+
+在启动 manager 或发送 webhook 之前，先安装 HealingRequest CRD：
+
+```bash
+kubectl apply -f config/crd/_healingrequests.yaml
+kubectl get crd healingrequests.kubesentinel.io
+```
+
+如果缺少这一步，Webhook 虽然可能接收到请求，但 `HealingRequest` 无法落库，闭环验证会直接失败。
+
+### 4. 启动控制器
 
 Kube-Sentinel 当前通过 controller-runtime manager 运行，并在本地暴露以下端口：
 
@@ -145,7 +183,7 @@ registered health and readiness checks
 
 如果 manager 已经启动成功，但随后看到类似 `workload default/demo-app not found as Deployment or StatefulSet` 的日志，这表示控制器已经开始处理某个 `HealingRequest`，只是告警指向的目标工作负载在集群中不存在。
 
-### 4. 发送一个测试告警
+### 5. 发送一个测试告警
 
 Webhook 路径：
 
@@ -201,7 +239,7 @@ curl -X POST http://127.0.0.1:8090/alertmanager/webhook \
   }'
 ```
 
-### 5. 查看生成的 HealingRequest
+### 6. 查看生成的 HealingRequest
 
 Receiver 会将告警映射成 `HealingRequest`。对象名默认形如：
 
@@ -225,6 +263,21 @@ kubectl get healingrequest hr-demo-app -n default -o yaml
 - `status.lastError`
 - `status.nextRecommendation`
 - `status.correlationKey`
+
+如果是在单节点、低副本的本地集群上做第一次闭环联调，还要额外看：
+
+- `status.blockReasonCode`
+- `status.namespaceBlockRate`
+- `status.lastGateDecision`
+
+默认 `blastRadius.maxPodPercentage=10` 对本地小集群通常过严。比如默认 namespace 只有 4 个 Pod，而目标 Deployment 有 3 个副本时，影响比例是 $75\%$，一定会被门禁阻断。这不是控制器异常，而是安全策略按设计生效。
+
+本地 smoke 建议：
+
+- 使用更多基础 Pod 拉高总量，或者
+- 临时把验证对象的 `spec.blastRadius.maxPodPercentage` 提高到适合本地环境的值，例如 `100`
+
+联调完成后应恢复更保守的阈值。
 
 ## 首发行为说明
 

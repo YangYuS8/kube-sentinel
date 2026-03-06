@@ -31,11 +31,11 @@ func TestCheckCRDConsistencyPassesWhenNoDrift(t *testing.T) {
 	if err := os.MkdirAll(generatedDir, 0o755); err != nil {
 		t.Fatalf("mkdir generated failed: %v", err)
 	}
-	content := []byte("kind: CustomResourceDefinition\nmetadata:\n  name: demo\n")
-	if err := os.WriteFile(filepath.Join(sourceDir, "demo.yaml"), content, 0o644); err != nil {
+	content := []byte("apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: healingrequests.kubesentinel.io\nspec:\n  group: kubesentinel.io\n  versions:\n  - name: v1alpha1\n")
+	if err := os.WriteFile(filepath.Join(sourceDir, "_healingrequests.yaml"), content, 0o644); err != nil {
 		t.Fatalf("write source file failed: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(generatedDir, "demo.yaml"), content, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(generatedDir, "_healingrequests.yaml"), content, 0o644); err != nil {
 		t.Fatalf("write generated file failed: %v", err)
 	}
 
@@ -58,10 +58,10 @@ func TestCheckCRDConsistencyBlocksWhenDriftDetected(t *testing.T) {
 	if err := os.MkdirAll(generatedDir, 0o755); err != nil {
 		t.Fatalf("mkdir generated failed: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(sourceDir, "demo.yaml"), []byte("spec:\n  version: v1\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(sourceDir, "_healingrequests.yaml"), []byte("apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: healingrequests.kubesentinel.io\nspec:\n  group: kubesentinel.io\n  scope: Namespaced\n  versions:\n  - name: v1alpha1\n"), 0o644); err != nil {
 		t.Fatalf("write source file failed: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(generatedDir, "demo.yaml"), []byte("spec:\n  version: v2\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(generatedDir, "_healingrequests.yaml"), []byte("apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: healingrequests.kubesentinel.io\nspec:\n  group: kubesentinel.io\n  scope: Cluster\n  versions:\n  - name: v1alpha1\n"), 0o644); err != nil {
 		t.Fatalf("write generated file failed: %v", err)
 	}
 
@@ -74,6 +74,40 @@ func TestCheckCRDConsistencyBlocksWhenDriftDetected(t *testing.T) {
 		"QUALITY_GATE_CATEGORY=crd_consistency",
 		"QUALITY_GATE_REASON=crd_generation_drift",
 		"QUALITY_GATE_FIX_HINT=run:",
+	} {
+		if !strings.Contains(output, token) {
+			t.Fatalf("missing token %s in output: %s", token, output)
+		}
+	}
+}
+
+func TestCheckCRDConsistencyBlocksWhenManifestInvalid(t *testing.T) {
+	tempDir := t.TempDir()
+	sourceDir := filepath.Join(tempDir, "source")
+	generatedDir := filepath.Join(tempDir, "generated")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("mkdir source failed: %v", err)
+	}
+	if err := os.MkdirAll(generatedDir, 0o755); err != nil {
+		t.Fatalf("mkdir generated failed: %v", err)
+	}
+	invalid := []byte("apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: healingrequests.\nspec:\n  group: \"\"\n  versions:\n  - name: \"\"\n")
+	if err := os.WriteFile(filepath.Join(sourceDir, "_healingrequests.yaml"), invalid, 0o644); err != nil {
+		t.Fatalf("write source file failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(generatedDir, "_healingrequests.yaml"), invalid, 0o644); err != nil {
+		t.Fatalf("write generated file failed: %v", err)
+	}
+
+	output, err := runCRDConsistencyScript(t, sourceDir, generatedDir)
+	if err == nil {
+		t.Fatalf("expected invalid manifest to fail, output: %s", output)
+	}
+	for _, token := range []string{
+		"QUALITY_GATE_RESULT=block",
+		"QUALITY_GATE_CATEGORY=crd_consistency",
+		"QUALITY_GATE_REASON=crd_manifest_invalid",
+		"expected metadata.name=healingrequests.kubesentinel.io",
 	} {
 		if !strings.Contains(output, token) {
 			t.Fatalf("missing token %s in output: %s", token, output)

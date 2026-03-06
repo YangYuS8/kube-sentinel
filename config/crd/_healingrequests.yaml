@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: healingrequests.
+  name: healingrequests.kubesentinel.io
 spec:
-  group: ""
+  group: kubesentinel.io
   names:
     kind: HealingRequest
     listKind: HealingRequestList
@@ -14,7 +14,7 @@ spec:
     singular: healingrequest
   scope: Namespaced
   versions:
-  - name: ""
+  - name: v1alpha1
     schema:
       openAPIV3Schema:
         properties:

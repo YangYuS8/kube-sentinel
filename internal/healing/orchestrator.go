@@ -32,10 +32,15 @@ type Orchestrator struct {
 	actionHistory   map[string][]time.Time
 }
 
-func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingRequest) error {
+type ProcessResult struct {
+	RequeueAfter time.Duration
+}
+
+func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingRequest) (ProcessResult, error) {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
+	result := ProcessResult{}
 	startedAt := o.Now()
 	defer func() {
 		if o.Metrics != nil {
@@ -60,10 +65,10 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		req.Status.LastError = err.Error()
 		req.Status.Phase = ksv1alpha1.PhaseBlocked
 		req.Status.LastEventReason = "validation-failed"
-		return err
+		return result, err
 	}
 	if req.Status.ObservedGeneration == req.Generation && req.Status.Phase == ksv1alpha1.PhaseCompleted {
-		return nil
+		return result, nil
 	}
 	if !o.Adapter.Supports(req.Spec.Workload.Kind) {
 		logger.Info("unsupported workload kind blocked", "kind", req.Spec.Workload.Kind)
@@ -74,7 +79,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		req.Status.Phase = ksv1alpha1.PhaseBlocked
 		req.Status.BlockReasonCode = "unsupported_workload"
 		req.Status.LastEventReason = "unsupported-workload"
-		return fmt.Errorf("unsupported kind")
+		return result, fmt.Errorf("unsupported kind")
 	}
 	if o.Metrics != nil {
 		o.Metrics.IncTriggers()
@@ -104,7 +109,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 			}
 			o.emitRuntimeEvent(req, "Warning", "CircuitBreakerOpen", reason)
 			o.writeAudit(req, "blocked", req.Status.CircuitBreaker.OpenReason)
-			return errors.New(reason)
+			return result, errors.New(reason)
 		}
 	}
 	runtimeInputProvider := o.RuntimeInputProvider
@@ -123,7 +128,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		req.Status.LastGateDecision = "runtime input unavailable"
 		o.emitRuntimeEvent(req, "Warning", "GateInputUnavailable", err.Error())
 		o.writeAudit(req, "blocked", req.Status.LastError)
-		return err
+		return result, err
 	}
 	runtimeInput.ActionsInWindow = o.actionsInWindow(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now(), req.Spec.RateLimit.WindowMinutes)
 	if hasAlertMetadata(req) && isResolvedAlert(req) {
@@ -137,16 +142,17 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		if o.Metrics != nil {
 			o.Metrics.IncSuppressed()
 		}
-		return nil
+		return result, nil
 	}
 	if hasAlertMetadata(req) {
 		soakDuration, minSamples := soakProfileFor(req)
-		if pending, done := o.advanceSoakWindow(req, soakDuration, minSamples); !done {
+		if pending, done, requeueAfter := o.advanceSoakWindow(req, soakDuration, minSamples); !done {
+			result.RequeueAfter = requeueAfter
 			if pending {
 				o.emitRuntimeEvent(req, "Normal", "PendingVerify", req.Status.LastGateDecision)
 				o.writeAudit(req, "pending-verify", req.Status.LastGateDecision)
 			}
-			return nil
+			return result, nil
 		}
 	}
 	totalWorkloads := maxInt(runtimeInput.TotalWorkloads, 1)
@@ -176,7 +182,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 			req.Status.LastGateDecision = fmt.Sprintf("namespace budget exceeded (rate=%d%%, unhealthy=%d, total=%d)", namespaceBlockRate, unhealthyWorkloads, totalWorkloads)
 			o.emitRuntimeEvent(req, "Warning", "NamespaceBudgetBlocked", req.Status.LastGateDecision)
 			o.writeAudit(req, "blocked", req.Status.LastGateDecision)
-			return errors.New(req.Status.LastError)
+			return result, errors.New(req.Status.LastError)
 		}
 	}
 	decision := safety.Evaluate(safety.GateInput{
@@ -206,7 +212,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		if o.Metrics != nil {
 			o.Metrics.IncReadOnlyBlocks("gate", req.Spec.Workload.Kind)
 		}
-		return errors.New(decision.Reason)
+		return result, errors.New(decision.Reason)
 	}
 	req.Status.LastGateDecision = "allowed"
 
@@ -227,7 +233,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 			req.Status.ShadowAction = "would execute controlled statefulset action but blocked by freeze window"
 			o.emitRuntimeEvent(req, "Warning", "StatefulSetFrozen", freezeReason)
 			o.writeAudit(req, "blocked", freezeReason)
-			return errors.New(req.Status.LastError)
+			return result, errors.New(req.Status.LastError)
 		}
 		authorized, authReason := authorizeStatefulSet(req, runtimeInput)
 		req.Status.StatefulSetAuthorization = authReason
@@ -253,7 +259,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 			req.Status.ShadowAction = "would execute controlled statefulset action but authorization gate failed"
 			o.emitRuntimeEvent(req, "Warning", runtimeEventReason, authReason)
 			o.writeAudit(req, "blocked", authReason)
-			return errors.New(req.Status.LastError)
+			return result, errors.New(req.Status.LastError)
 		}
 		if runtimeInput.ActionsInWindow > 0 {
 			if o.Metrics != nil {
@@ -269,7 +275,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 			req.Status.ShadowAction = "would execute controlled statefulset action but blocked by idempotency window"
 			o.emitRuntimeEvent(req, "Warning", "StatefulSetIdempotencyBlocked", req.Status.LastError)
 			o.writeAudit(req, "blocked", req.Status.LastError)
-			return errors.New(req.Status.LastError)
+			return result, errors.New(req.Status.LastError)
 		}
 		if err := o.Adapter.ValidateStatefulSetEvidence(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name); err != nil {
 			if o.Metrics != nil {
@@ -286,7 +292,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 			req.Status.ShadowAction = "would execute controlled statefulset action but runtime evidence check failed"
 			o.emitRuntimeEvent(req, "Warning", "StatefulSetEvidenceMissing", err.Error())
 			o.writeAudit(req, "blocked", err.Error())
-			return errors.New(req.Status.LastError)
+			return result, errors.New(req.Status.LastError)
 		}
 		snap, err := o.createSnapshot(ctx, req, "statefulset-l1")
 		if err != nil {
@@ -301,7 +307,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 			req.Status.SnapshotFailureReason = err.Error()
 			o.emitRuntimeEvent(req, "Warning", "SnapshotCreateFailed", err.Error())
 			o.writeAudit(req, "blocked", "statefulset snapshot creation failed")
-			return err
+			return result, err
 		}
 		o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name+"/l1", o.Now(), req.Spec.IdempotencyWindowMinutes)
 		if err := o.Adapter.ExecuteStatefulSetControlledAction(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name, "restart"); err != nil {
@@ -315,7 +321,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 				o.Metrics.IncStatefulSetControlledAction(req.Spec.Workload.Kind, "restart", "failed", req.Status.StatefulSetFreezeState)
 			}
 			o.emitRuntimeEvent(req, "Warning", "StatefulSetL1Failed", err.Error())
-			return o.processStatefulSetL2(ctx, req, runtimeInput, snap)
+			return result, o.processStatefulSetL2(ctx, req, runtimeInput, snap)
 		}
 		req.Status.Phase = ksv1alpha1.PhaseCompleted
 		req.Status.LastAction = "statefulset-controlled-restart"
@@ -332,7 +338,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now(), req.Spec.RateLimit.WindowMinutes)
 		o.emitRuntimeEvent(req, "Normal", "StatefulSetControlledActionSucceeded", "statefulset controlled restart executed")
 		o.writeAudit(req, "success", "statefulset controlled restart executed")
-		return nil
+		return result, nil
 	}
 
 	if o.actionsInWindow(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name+"/l1", o.Now(), req.Spec.IdempotencyWindowMinutes) > 0 {
@@ -350,7 +356,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		}
 		o.emitRuntimeEvent(req, "Warning", "DeploymentL1IdempotencyBlocked", req.Status.LastError)
 		o.writeAudit(req, "blocked", req.Status.LastError)
-		return errors.New(req.Status.LastError)
+		return result, errors.New(req.Status.LastError)
 	}
 
 	_, err = o.createSnapshot(ctx, req, "deployment-l1")
@@ -375,7 +381,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		req.Status.NextRecommendation = "fix snapshot creation or continue with manual intervention"
 		o.emitRuntimeEvent(req, "Warning", "SnapshotCreateFailed", err.Error())
 		o.writeAudit(req, "blocked", err.Error())
-		return err
+		return result, err
 	}
 
 	req.Status.Phase = ksv1alpha1.PhaseL1
@@ -415,7 +421,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		}
 		o.emitRuntimeEvent(req, "Warning", "DeploymentL1Failed", err.Error())
 		o.writeAudit(req, "blocked", req.Status.LastError)
-		return err
+		return result, err
 	}
 
 	o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name+"/l1", o.Now(), req.Spec.IdempotencyWindowMinutes)
@@ -436,36 +442,63 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 	}
 	o.writeAudit(req, "success", "deployment l1 action executed")
 	o.emitRuntimeEvent(req, "Normal", "DeploymentL1Succeeded", "deployment l1 rollout restart executed")
-	return nil
+	return result, nil
 }
 
-func (o *Orchestrator) advanceSoakWindow(req *ksv1alpha1.HealingRequest, duration time.Duration, minSamples int) (bool, bool) {
+func (o *Orchestrator) advanceSoakWindow(req *ksv1alpha1.HealingRequest, duration time.Duration, minSamples int) (bool, bool, time.Duration) {
 	now := o.Now()
+	if minSamples < 1 {
+		minSamples = 1
+	}
+	sampleInterval := duration / time.Duration(minSamples)
+	if sampleInterval <= 0 {
+		sampleInterval = duration
+	}
+	if sampleInterval <= 0 {
+		sampleInterval = time.Second
+	}
 	if req.Status.PendingSince == "" {
 		req.Status.PendingSince = now.Format(time.RFC3339)
 		req.Status.StableSampleCount = 1
 		req.Status.Phase = ksv1alpha1.PhasePendingVerify
-		req.Status.LastGateDecision = fmt.Sprintf("pending verify (soak=%s,minSamples=%d)", duration.String(), minSamples)
-		return true, false
+		req.Status.LastGateDecision = fmt.Sprintf("pending verify (soak=%s,stableSamples=%d/%d)", duration.String(), req.Status.StableSampleCount, minSamples)
+		return true, false, sampleInterval
 	}
 	pendingAt, err := time.Parse(time.RFC3339, req.Status.PendingSince)
 	if err != nil {
 		req.Status.PendingSince = now.Format(time.RFC3339)
 		req.Status.StableSampleCount = 1
 		req.Status.Phase = ksv1alpha1.PhasePendingVerify
-		req.Status.LastGateDecision = fmt.Sprintf("pending verify (soak=%s,minSamples=%d)", duration.String(), minSamples)
-		return true, false
+		req.Status.LastGateDecision = fmt.Sprintf("pending verify (soak=%s,stableSamples=%d/%d)", duration.String(), req.Status.StableSampleCount, minSamples)
+		return true, false, sampleInterval
 	}
-	req.Status.StableSampleCount++
-	if now.Sub(pendingAt) < duration || req.Status.StableSampleCount < minSamples {
+	elapsed := now.Sub(pendingAt)
+	samples := 1 + int(elapsed/sampleInterval)
+	if samples > minSamples {
+		samples = minSamples
+	}
+	req.Status.StableSampleCount = samples
+	if elapsed < duration || req.Status.StableSampleCount < minSamples {
 		req.Status.Phase = ksv1alpha1.PhasePendingVerify
 		req.Status.LastGateDecision = fmt.Sprintf("pending verify (soak=%s,stableSamples=%d/%d)", duration.String(), req.Status.StableSampleCount, minSamples)
-		return false, false
+		remainingDuration := duration - elapsed
+		remainingSample := sampleInterval - (elapsed % sampleInterval)
+		if remainingSample <= 0 {
+			remainingSample = sampleInterval
+		}
+		requeueAfter := remainingDuration
+		if requeueAfter <= 0 || remainingSample < requeueAfter {
+			requeueAfter = remainingSample
+		}
+		if requeueAfter <= 0 {
+			requeueAfter = time.Second
+		}
+		return false, false, requeueAfter
 	}
 	req.Status.PendingSince = ""
 	req.Status.StableSampleCount = 0
 	req.Status.LastEvidenceStatus = "soak-window-passed"
-	return false, true
+	return false, true, 0
 }
 
 func (o *Orchestrator) breakerFor(req *ksv1alpha1.HealingRequest) *safety.CircuitBreaker {
@@ -625,14 +658,14 @@ func (o *Orchestrator) writeAudit(req *ksv1alpha1.HealingRequest, result, afterS
 			event.GateResult = req.Status.LastGateDecision
 		}
 	}
-	if summaryErr != nil && req.Status.BlockReasonCode == "" {
-		req.Status.BlockReasonCode = "release_readiness_summary_incomplete"
-	}
 	event.Decision = gateOutcome
 	event.EvidenceComplete = event.IsProductionGateReportComplete()
 	req.Status.GateOutcome = gateOutcome
 	req.Status.GateReasonCode = reasonCode
 	req.Status.GateEvidenceComplete = event.EvidenceComplete
+	if summaryErr != nil {
+		req.Status.GateEvidenceComplete = false
+	}
 	o.AuditSink.Write(event)
 	if o.Metrics != nil {
 		o.Metrics.IncProductionGateReport(event.EvidenceComplete)
@@ -648,6 +681,7 @@ func (o *Orchestrator) ensureStatusSemantics(req *ksv1alpha1.HealingRequest) {
 	if req == nil {
 		return
 	}
+	o.normalizeStatusForPhase(req)
 	if req.Status.LastAction == "" {
 		switch req.Status.Phase {
 		case ksv1alpha1.PhasePendingVerify:
@@ -697,23 +731,55 @@ func (o *Orchestrator) ensureStatusSemantics(req *ksv1alpha1.HealingRequest) {
 			req.Status.LastGateDecision = "outcome=allow reason_code=l1_in_progress stage=l1"
 		}
 	}
-	if req.Status.GateOutcome == "" {
-		switch {
-		case strings.Contains(req.Status.LastGateDecision, "outcome=block"):
-			req.Status.GateOutcome = "block"
-		case strings.Contains(req.Status.LastGateDecision, "outcome=degrade"):
-			req.Status.GateOutcome = "degrade"
-		case strings.Contains(req.Status.LastGateDecision, "outcome=hold"):
-			req.Status.GateOutcome = "hold"
-		case req.Status.LastGateDecision != "":
-			req.Status.GateOutcome = "allow"
-		}
+	switch {
+	case req.Status.BlockReasonCode != "" || strings.Contains(req.Status.LastGateDecision, "outcome=block"):
+		req.Status.GateOutcome = "block"
+	case strings.Contains(req.Status.LastGateDecision, "outcome=degrade"):
+		req.Status.GateOutcome = "degrade"
+	case strings.Contains(req.Status.LastGateDecision, "outcome=hold"):
+		req.Status.GateOutcome = "hold"
+	case req.Status.LastGateDecision != "":
+		req.Status.GateOutcome = "allow"
+	default:
+		req.Status.GateOutcome = ""
 	}
-	if req.Status.GateReasonCode == "" {
-		req.Status.GateReasonCode = gateReasonCodeFromStatus(req.Status)
-	}
+	req.Status.GateReasonCode = gateReasonCodeFromStatus(req.Status)
 	if req.Status.LastError == "" && (req.Status.Phase == ksv1alpha1.PhaseBlocked || req.Status.Phase == ksv1alpha1.PhaseL3) && req.Status.BlockReasonCode != "" {
 		req.Status.LastError = strings.ReplaceAll(req.Status.BlockReasonCode, "_", " ")
+	}
+}
+
+func (o *Orchestrator) normalizeStatusForPhase(req *ksv1alpha1.HealingRequest) {
+	if req == nil {
+		return
+	}
+	if req.Status.Phase != ksv1alpha1.PhasePendingVerify {
+		req.Status.PendingSince = ""
+		req.Status.StableSampleCount = 0
+	}
+	if req.Status.Phase != ksv1alpha1.PhaseSuppressed {
+		req.Status.SuppressedAt = ""
+	}
+	shouldClearBlockedState := req.Status.Phase != ksv1alpha1.PhaseCompleted || req.Status.GateOutcome != "block"
+
+	switch req.Status.Phase {
+	case ksv1alpha1.PhasePendingVerify, ksv1alpha1.PhaseSuppressed, ksv1alpha1.PhaseL1:
+		req.Status.BlockReasonCode = ""
+		req.Status.LastError = ""
+		req.Status.ShadowAction = ""
+		req.Status.SnapshotFailureReason = ""
+		req.Status.StatefulSetFailureReason = ""
+	case ksv1alpha1.PhaseCompleted:
+		if shouldClearBlockedState {
+			req.Status.BlockReasonCode = ""
+			req.Status.LastError = ""
+			req.Status.ShadowAction = ""
+			req.Status.SnapshotFailureReason = ""
+			req.Status.StatefulSetFailureReason = ""
+		}
+		if req.Status.Phase == ksv1alpha1.PhaseCompleted {
+			req.Status.NamespaceBlockRate = 0
+		}
 	}
 }
 
