@@ -38,6 +38,13 @@ func TestWebhookValidCreatesRequest(t *testing.T) {
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("expected accepted, got %d", w.Code)
 	}
+	var obj ksv1alpha1.HealingRequest
+	if err := r.Client.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "hr-app"}, &obj); err != nil {
+		t.Fatalf("expected healingrequest for deployment: %v", err)
+	}
+	if obj.Annotations["kube-sentinel.io/workload-capability"] != "writable" {
+		t.Fatalf("expected deployment workload capability to stay writable")
+	}
 }
 
 func TestWebhookRejectsInvalid(t *testing.T) {

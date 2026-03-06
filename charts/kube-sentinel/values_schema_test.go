@@ -126,6 +126,36 @@ func TestValuesYamlIncludesAPIContractPolicyDefaults(t *testing.T) {
 	}
 }
 
+func TestValuesSchemaIncludesWorkloadKindEnum(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("values.schema.json"))
+	if err != nil {
+		t.Fatalf("read schema failed: %v", err)
+	}
+	var schema map[string]interface{}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("unmarshal schema failed: %v", err)
+	}
+	properties := schema["properties"].(map[string]interface{})
+	healingRequest := properties["healingRequest"].(map[string]interface{})
+	healingProperties := healingRequest["properties"].(map[string]interface{})
+	workloadKind := healingProperties["workloadKind"].(map[string]interface{})
+	enumValues := workloadKind["enum"].([]interface{})
+	if len(enumValues) != 2 || enumValues[0].(string) != "Deployment" || enumValues[1].(string) != "StatefulSet" {
+		t.Fatalf("unexpected workloadKind enum: %#v", enumValues)
+	}
+}
+
+func TestValuesYamlDefaultsToDeploymentWorkloadKind(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("values.yaml"))
+	if err != nil {
+		t.Fatalf("read values yaml failed: %v", err)
+	}
+	content := string(raw)
+	if !strings.Contains(content, "workloadKind: Deployment") {
+		t.Fatalf("values.yaml should default workloadKind to Deployment for safe l1 mvp")
+	}
+}
+
 func TestValuesSchemaIncludesDeliveryPipeline(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("values.schema.json"))
 	if err != nil {

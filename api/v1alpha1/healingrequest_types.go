@@ -492,6 +492,9 @@ func (status HealingRequestStatus) ValidateContractSemantics() error {
 	if status.LastAction == "" {
 		return fmt.Errorf("status.lastAction is required for api contract semantics")
 	}
+	if status.LastGateDecision == "" {
+		return fmt.Errorf("status.lastGateDecision is required for api contract semantics")
+	}
 	if status.NextRecommendation == "" {
 		return fmt.Errorf("status.nextRecommendation is required for api contract semantics")
 	}
