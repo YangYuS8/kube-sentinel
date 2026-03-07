@@ -1,27 +1,27 @@
 # 发布与回滚说明
 
-## deployment-safe-l1-mvp 首发说明
+## deployment-tiered-healing 首发说明
 
-- 首发只开放 Deployment 的 L1 最小影响动作，默认动作是 `rollout restart`。
+- 首发开放 Deployment 的分层处置：L1 默认执行 `rollout restart`，L1 失败后允许进入 L2 健康版本回滚，无法证明安全时降级为 L3 人工介入建议。
 - StatefulSet 在首发阶段仍按只读评估处理，不纳入自动写路径验收。
-- Deployment 的 L2/L3 自动升级与复杂发布门禁不属于首发范围；L1 失败时应输出阻断证据并转人工介入。
+- Deployment 的 L3 仍保持人工介入，不引入更激进的自动升级；L2 回滚失败时必须先尝试恢复 L1 前快照，再输出阻断证据与人工介入建议。
 - 测试环境统一入口使用 [scripts/install-minimal.sh](scripts/install-minimal.sh) 与 [scripts/dev-local-loop.sh](scripts/dev-local-loop.sh)；它们面向联调与 minikube，不直接等同生产安装基线。
-- 首发灰度必须优先验证：Webhook 接入幂等、维护窗口阻断、速率限制、爆炸半径、熔断、写前快照失败阻断。
-- 首发回滚优先级：先关闭自动写路径，再保留只读评估与审计链路，最后根据最近快照与审计记录执行人工恢复。
+- 首发灰度必须优先验证：Webhook 接入幂等、维护窗口阻断、速率限制、爆炸半径、熔断、写前快照失败阻断、Deployment L2 健康候选选择、L2 回滚失败后的快照恢复。
+- 首发回滚优先级：先关闭 Deployment L2 自动回滚，再保留 L1 或只读评估链路，最后根据最近快照与审计记录执行人工恢复。
 
 ## 灰度启用策略
 
 0. 合并前必须执行统一交付门禁：`make quality-gate`。
 1. 首先在低风险命名空间启用 webhook 接入与对象级熔断。
 2. 校验运行参数为声明式配置驱动（幂等窗口、限频、爆炸半径、熔断阈值）。
-3. 本地联调优先执行 `bash ./scripts/drill-runtime-closed-loop.sh default`，确认默认阻断路径与单次放宽后的成功路径都通过。
+3. 本地联调优先执行 `bash ./scripts/drill-runtime-closed-loop.sh default`，确认默认阻断路径与单次放宽后的成功路径都通过；Deployment L2 的降级与恢复语义继续由单元测试和发布门禁校验。
 4. 观察关键指标（失败率、回滚次数、熔断次数）24 小时。
 5. 通过配置开关启用域级熔断。
 6. 校验 K8s Event 与审计记录可通过 correlation key 串联。
 7. 启用保守模式后，校验 `PendingVerify` / `Suppressed` 状态、影子执行说明与命名空间预算阻断证据。
 8. 启用 StatefulSet 接入时，先确认默认仅 `read-only`，阻断原因包含 `statefulset_readonly`。
 9. 启用 StatefulSet Phase 2 时，必须同时配置：`controlledActionsEnabled=true`、`allowedNamespaces`、`approvalAnnotation`、`freezeWindowMinutes`。
-10. 灰度期间必须观测以下阈值：误动作率 < 1%、回退率 < 5%、冻结触发率 < 5%。任一越线立即回退只读。
+10. 灰度期间必须观测以下阈值：误动作率 < 1%、Deployment L2 回退率 < 5%、冻结触发率 < 5%。任一越线立即回退只读。
 11. 启用 StatefulSet Phase 3（L2）时，必须同时开启 `statefulSetPolicy.l2RollbackEnabled=true`，并校验 L2 候选窗口与降级阈值参数。
 12. Phase 3 灰度期间重点观测：L2 成功率、L2 失败回退率、L2 降级率；任一连续窗口越线应关闭 L2。
 13. 启用持久快照时，必须配置 `snapshotPolicy.retentionMinutes`、`snapshotPolicy.restoreTimeoutSeconds`、`snapshotPolicy.maxSnapshotsPerWorkload` 并先在白名单命名空间灰度。
@@ -169,11 +169,11 @@
 
 ## 回滚步骤
 
-1. 将策略模式切换为 `L1 + 人工介入`。
+1. 将策略模式切换为 `L1 + 人工介入`，必要时显式关闭 Deployment L2 自动回滚路径。
 2. 关闭 webhook 自动写入，仅保留只读评估与审计。
 3. 关闭域级熔断开关，仅保留对象级熔断。
 4. 如果仍异常，停用自动写操作，仅保留只读评估与告警。
-5. 根据审计记录恢复到最近稳定发布版本。
+5. 若最近一次 Deployment L2 回滚失败，先核对 `snapshotRestoreResult` 与最近健康 revision，再根据审计记录恢复到最近稳定发布版本。
 6. 关闭保守模式预算阻断与白名单尝试权，恢复基础门禁策略。
 7. 将 `statefulSetPolicy.controlledActionsEnabled=false` 且 `statefulSetPolicy.readOnlyOnly=true`，回退到只读策略。
 8. 清理审批注解 `kube-sentinel.io/statefulset-approved`，避免误触发下一轮自动动作。

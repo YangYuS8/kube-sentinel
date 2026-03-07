@@ -1,3 +1,5 @@
+# deployment-l2-healthy-revision-rollback Design
+
 ## 上下文
 
 当前 Deployment 路径在 L1 rollout restart 失败或快照创建失败后，会直接把 `deploymentL2Decision` 写成 `not-allowed-in-mvp`，并把 `deploymentL2Result` 标记为 `skipped`。这与主规格中已经存在的 Deployment L2 健康版本回滚要求不一致，也让最核心的通用工作负载仍停留在“失败后仅人工接管”的半成品状态。

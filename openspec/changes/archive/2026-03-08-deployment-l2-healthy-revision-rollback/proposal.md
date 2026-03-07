@@ -1,3 +1,5 @@
+# deployment-l2-healthy-revision-rollback Proposal
+
 ## 为什么
 
 当前仓库已经具备 Deployment L1 处置、快照校验、StatefulSet 受控回滚和 Deployment L2 相关状态/指标骨架，但 Deployment 在 L1 失败后仍直接标记为 not-allowed-in-mvp，导致 openspec/config.yaml 中要求的 L1 -> L2 -> L3 渐进式处置链路在最常见工作负载上没有闭环。现在应优先补齐这一缺口，因为本地安装、联调和 smoke 回路已经稳定，继续推迟只会让后续发布准备和生产灰度缺少最关键的自动回滚能力。

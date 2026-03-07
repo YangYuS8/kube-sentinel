@@ -6,7 +6,7 @@ Kube-Sentinel 是一个基于事件驱动的 Kubernetes 故障自愈控制器。
 
 - 通过 Alertmanager Webhook 接收故障事件
 - 将事件映射为 `HealingRequest`
-- 对 Deployment 执行安全优先的 L1 最小影响动作
+- 对 Deployment 执行安全优先的分层处置：L1 最小影响动作，L2 健康版本回滚，L3 人工介入建议
 - 在任何自动写操作前执行门禁判定与快照校验
 - 输出结构化审计记录、运行时事件和指标
 
@@ -17,19 +17,19 @@ Kube-Sentinel 是一个基于事件驱动的 Kubernetes 故障自愈控制器。
 首发版本已经完成的能力：
 
 - `Deployment` 自动处置闭环
+- `Deployment` L1 失败后的 L2 健康版本回滚与 L3 人工介入建议
 - Alertmanager Webhook 接入与事件幂等去重
 - `HealingRequest` 默认值、校验约束和状态语义
 - L1 写动作前的安全门禁：维护窗口、速率限制、爆炸半径、熔断
-- 写前快照创建失败即阻断
+- 写前快照创建失败即阻断，L2 回滚失败时自动尝试恢复 L1 前快照
 - K8s Event、结构化审计和 Prometheus 指标输出
 - 质量门禁：`go test`、`race`、`vet`、`golangci-lint`、CRD/Helm 一致性检查
 
 当前明确不属于首发范围的能力：
 
-- `Deployment` 的 L2/L3 自动升级
 - `StatefulSet` 自动写动作
 - 复杂发布门禁自动化
-- 快照恢复编排的完整生产流程
+- 完整生产级多集群放量编排
 
 ## 核心链路
 
@@ -57,6 +57,10 @@ Orchestrator
         +--> 持久快照
         |
         +--> Deployment L1 动作
+        |
+        +--> Deployment L2 健康版本回滚
+        |
+        +--> L3 人工介入建议
         |
         +--> Audit / Event / Metrics
 ```

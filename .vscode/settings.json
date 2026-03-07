@@ -40,6 +40,7 @@
     "kubectl patch": true,
     "kubectl rollout": true,
     "kubectl cluster-info": true,
-    "kubectl -n kube-sentinel-system": true
+    "kubectl -n kube-sentinel-system": true,
+    "kubectl -n kube-system": true
   }
 }

@@ -151,7 +151,7 @@ func TestOrchestratorUnsupportedKind(t *testing.T) {
 	}
 }
 
-func TestOrchestratorDeploymentL1FailureBlocksWithoutEscalation(t *testing.T) {
+func TestOrchestratorDeploymentL1FailureEntersL2AndDegradesWithoutCandidate(t *testing.T) {
 	req := newReq()
 	o := &Orchestrator{
 		Adapter:     fakeAdapter{supports: true, deploymentActionErr: errors.New("l1 failed"), revisions: []RevisionRecord{{Revision: "1", UnixTime: 1, Healthy: false}}, affectedPods: 1, clusterPods: 100},
@@ -160,39 +160,39 @@ func TestOrchestratorDeploymentL1FailureBlocksWithoutEscalation(t *testing.T) {
 		Metrics:     &observability.Metrics{},
 		Now:         func() time.Time { return time.Unix(100, 0) },
 	}
-	if _, err := o.Process(context.Background(), req); err == nil {
-		t.Fatalf("expected deployment l1 failure")
+	if _, err := o.Process(context.Background(), req); err != nil {
+		t.Fatalf("expected l2 degrade to be handled without process error: %v", err)
 	}
-	if req.Status.Phase != ksv1alpha1.PhaseBlocked {
-		t.Fatalf("expected blocked phase, got %s", req.Status.Phase)
+	if req.Status.Phase != ksv1alpha1.PhaseL3 {
+		t.Fatalf("expected l3 phase, got %s", req.Status.Phase)
 	}
-	if req.Status.DeploymentL2Decision != "not-allowed-in-mvp" || req.Status.DeploymentL2Result != "skipped" {
-		t.Fatalf("expected deployment l2 to remain skipped in mvp")
+	if req.Status.DeploymentL2Decision != "no-healthy-candidate" || req.Status.DeploymentL2Result != "degraded" {
+		t.Fatalf("expected deployment l2 to degrade without healthy candidate, got %s/%s", req.Status.DeploymentL2Decision, req.Status.DeploymentL2Result)
 	}
-	if req.Status.BlockReasonCode != "deployment_l1_failed" {
-		t.Fatalf("expected deployment_l1_failed block reason, got %s", req.Status.BlockReasonCode)
+	if req.Status.BlockReasonCode != "deployment_l2_no_healthy_candidate" {
+		t.Fatalf("expected deployment_l2_no_healthy_candidate, got %s", req.Status.BlockReasonCode)
 	}
 	if req.Status.NextRecommendation == "" {
 		t.Fatalf("expected next recommendation for manual intervention")
 	}
 }
 
-func TestOrchestratorDeploymentL1FailureDoesNotAttemptRollback(t *testing.T) {
+func TestOrchestratorDeploymentL1FailureAttemptsRollbackToHealthyCandidate(t *testing.T) {
 	req := newReq()
 	rollbackCalls := 0
 	o := &Orchestrator{
-		Adapter:     fakeAdapter{supports: true, deploymentActionErr: errors.New("l1 failed"), revisions: []RevisionRecord{{Revision: "2", UnixTime: 2, Healthy: true}}, rollbackErr: errors.New("rollback failed"), rollbackCalls: &rollbackCalls, affectedPods: 1, clusterPods: 100},
+		Adapter:     fakeAdapter{supports: true, deploymentActionErr: errors.New("l1 failed"), revisions: []RevisionRecord{{Revision: "2", UnixTime: 2, Healthy: true}}, rollbackCalls: &rollbackCalls, affectedPods: 1, clusterPods: 100},
 		Snapshotter: &MemorySnapshotter{},
 		Now:         func() time.Time { return time.Unix(120, 0) },
 	}
-	if _, err := o.Process(context.Background(), req); err == nil {
-		t.Fatalf("expected deployment l1 failure")
+	if _, err := o.Process(context.Background(), req); err != nil {
+		t.Fatalf("expected deployment l2 rollback success: %v", err)
 	}
-	if rollbackCalls != 0 {
-		t.Fatalf("expected no rollback attempt in deployment-safe-l1-mvp")
+	if rollbackCalls != 1 {
+		t.Fatalf("expected one rollback attempt, got %d", rollbackCalls)
 	}
-	if req.Status.BlockReasonCode != "deployment_l1_failed" {
-		t.Fatalf("expected deployment_l1_failed, got %s", req.Status.BlockReasonCode)
+	if req.Status.Phase != ksv1alpha1.PhaseCompleted || req.Status.DeploymentL2Result != "success" {
+		t.Fatalf("expected completed deployment l2 success, got phase=%s result=%s", req.Status.Phase, req.Status.DeploymentL2Result)
 	}
 }
 
@@ -288,12 +288,15 @@ func TestOrchestratorBreakerUsesConfiguredThreshold(t *testing.T) {
 	req.Spec.CircuitBreaker.DomainFailureThreshold = 100
 	req.Spec.CircuitBreaker.CooldownMinutes = 10
 	o := &Orchestrator{
-		Adapter:     fakeAdapter{supports: true, deploymentActionErr: errors.New("l1 failed"), affectedPods: 1, clusterPods: 100},
+		Adapter:     fakeAdapter{supports: true, deploymentActionErr: errors.New("l1 failed"), revisions: []RevisionRecord{{Revision: "rev-bad", UnixTime: 1, Healthy: false}}, affectedPods: 1, clusterPods: 100},
 		Snapshotter: &MemorySnapshotter{},
 		Now:         func() time.Time { return time.Unix(1000, 0) },
 	}
-	if _, err := o.Process(context.Background(), req); err == nil {
-		t.Fatalf("expected first process to fail on deployment l1 action")
+	if _, err := o.Process(context.Background(), req); err != nil {
+		t.Fatalf("expected first process to degrade without transport error: %v", err)
+	}
+	if req.Status.Phase == ksv1alpha1.PhaseCompleted {
+		t.Fatalf("expected first process to count as an unsuccessful healing attempt")
 	}
 	req2 := newReq()
 	req2.Spec.CircuitBreaker.ObjectFailureThreshold = 1
@@ -359,7 +362,7 @@ func TestOrchestratorNamespaceBudgetBlocks(t *testing.T) {
 	}
 }
 
-func TestOrchestratorDeploymentL1FailureIgnoresL2DependencyPath(t *testing.T) {
+func TestOrchestratorDeploymentL1FailureDegradesOnDependencyValidation(t *testing.T) {
 	req := newReq()
 	req.Annotations = map[string]string{"kube-sentinel.io/alert-status": "firing"}
 	now := time.Unix(1000, 0)
@@ -370,45 +373,47 @@ func TestOrchestratorDeploymentL1FailureIgnoresL2DependencyPath(t *testing.T) {
 	}
 	req.Status.PendingSince = now.Format(time.RFC3339)
 	req.Status.StableSampleCount = 3
-	if _, err := o.Process(context.Background(), req); err == nil {
-		t.Fatalf("expected deployment l1 failure")
+	if _, err := o.Process(context.Background(), req); err != nil {
+		t.Fatalf("expected dependency-driven degrade without process error: %v", err)
 	}
-	if req.Status.Phase != ksv1alpha1.PhaseBlocked {
-		t.Fatalf("expected blocked phase, got %s", req.Status.Phase)
+	if req.Status.Phase != ksv1alpha1.PhaseL3 {
+		t.Fatalf("expected l3 phase, got %s", req.Status.Phase)
 	}
-	if req.Status.DeploymentL2Decision != "not-allowed-in-mvp" {
-		t.Fatalf("expected deployment l2 to stay disabled in mvp")
+	if req.Status.DeploymentL2Decision != "dependency-validation-failed" {
+		t.Fatalf("expected dependency-validation-failed, got %s", req.Status.DeploymentL2Decision)
 	}
 }
 
-func TestOrchestratorDeploymentL1FailureMarksManualIntervention(t *testing.T) {
+func TestOrchestratorDeploymentL1FailureRollbackFailureRestoresSnapshot(t *testing.T) {
 	req := newReq()
 	now := time.Unix(2000, 0)
+	snapshotter := &fakeSnapshotter{}
 	o := &Orchestrator{
 		Adapter: fakeAdapter{
 			supports:            true,
 			deploymentActionErr: errors.New("l1 failed"),
 			revisions:           []RevisionRecord{{Revision: "rev-ok", UnixTime: now.Unix() - 30, Healthy: true}},
+			rollbackErr:         errors.New("rollback failed"),
 		},
-		Snapshotter: &MemorySnapshotter{},
+		Snapshotter: snapshotter,
 		Metrics:     &observability.Metrics{},
 		Now:         func() time.Time { return now },
 	}
 	if _, err := o.Process(context.Background(), req); err == nil {
-		t.Fatalf("expected deployment l1 failure")
+		t.Fatalf("expected deployment l2 rollback failure")
 	}
-	if req.Status.Phase != ksv1alpha1.PhaseBlocked || req.Status.DeploymentL2Result != "skipped" {
-		t.Fatalf("expected blocked phase with skipped deployment l2 path")
+	if req.Status.Phase != ksv1alpha1.PhaseBlocked || req.Status.DeploymentL2Result != "fallback" {
+		t.Fatalf("expected blocked phase with fallback deployment l2 path")
 	}
-	if req.Status.LastAction != "deployment-l1-rollout-restart" {
-		t.Fatalf("expected last action to remain deployment l1")
+	if req.Status.SnapshotRestoreResult != "success" {
+		t.Fatalf("expected snapshot restore success, got %s", req.Status.SnapshotRestoreResult)
 	}
-	if !strings.Contains(req.Status.LastGateDecision, "deployment_l1_failed") {
-		t.Fatalf("expected deployment l1 failure evidence, got %s", req.Status.LastGateDecision)
+	if req.Status.BlockReasonCode != "rollback_failed_snapshot_restored" {
+		t.Fatalf("expected rollback_failed_snapshot_restored, got %s", req.Status.BlockReasonCode)
 	}
 }
 
-func TestOrchestratorDeploymentL1FailureIgnoresHealthyCandidateSearch(t *testing.T) {
+func TestOrchestratorDeploymentL1FailureRecordsHealthyCandidate(t *testing.T) {
 	req := newReq()
 	now := time.Unix(5000, 0)
 	o := &Orchestrator{
@@ -416,22 +421,23 @@ func TestOrchestratorDeploymentL1FailureIgnoresHealthyCandidateSearch(t *testing
 			supports:            true,
 			deploymentActionErr: errors.New("l1 failed"),
 			revisions:           []RevisionRecord{{Revision: "rev-old", UnixTime: now.Unix() - 5000, Healthy: true}},
+			rollbackErr:         errors.New("rollback failed"),
 		},
 		Snapshotter: &MemorySnapshotter{},
 		Now:         func() time.Time { return now },
 	}
 	if _, err := o.Process(context.Background(), req); err == nil {
-		t.Fatalf("expected deployment l1 failure")
+		t.Fatalf("expected deployment l2 rollback failure")
 	}
-	if req.Status.Phase != ksv1alpha1.PhaseBlocked || req.Status.DeploymentL2Result != "skipped" {
-		t.Fatalf("expected deployment to stop at blocked l1 state")
+	if req.Status.DeploymentL2Candidate != "rev-old" {
+		t.Fatalf("expected deployment l2 candidate recorded, got %s", req.Status.DeploymentL2Candidate)
 	}
-	if req.Status.DeploymentL2Candidate != "" {
-		t.Fatalf("expected no deployment l2 candidate in mvp")
+	if req.Status.LastHealthyRevision != "rev-old" {
+		t.Fatalf("expected last healthy revision recorded, got %s", req.Status.LastHealthyRevision)
 	}
 }
 
-func TestOrchestratorDeploymentL2ControlsDoNotOverrideL1Failure(t *testing.T) {
+func TestOrchestratorDeploymentL2GateBlocksWhenHistoricalFailureRateTooHigh(t *testing.T) {
 	req := newReq()
 	req.Spec.DeploymentPolicy.L2MaxDegradeRatePercent = 30
 	now := time.Unix(3500, 0)
@@ -449,18 +455,18 @@ func TestOrchestratorDeploymentL2ControlsDoNotOverrideL1Failure(t *testing.T) {
 		},
 		Now: func() time.Time { return now },
 	}
-	if _, err := o.Process(context.Background(), req); err == nil {
-		t.Fatalf("expected deployment l1 failure")
+	if _, err := o.Process(context.Background(), req); err != nil {
+		t.Fatalf("expected l2 gate block to degrade without process error: %v", err)
 	}
-	if req.Status.BlockReasonCode != "deployment_l1_failed" {
-		t.Fatalf("expected deployment_l1_failed, got %s", req.Status.BlockReasonCode)
+	if req.Status.DeploymentL2Decision != "rollback-gate-blocked" {
+		t.Fatalf("expected rollback-gate-blocked, got %s", req.Status.DeploymentL2Decision)
 	}
-	if req.Status.DeploymentL2Result != "skipped" {
-		t.Fatalf("expected deployment l2 controls to remain unused in mvp")
+	if req.Status.DeploymentL2Result != "degraded" {
+		t.Fatalf("expected degraded deployment l2 result, got %s", req.Status.DeploymentL2Result)
 	}
 }
 
-func TestOrchestratorDeploymentL1FailureIgnoresExistingL2IdempotencyHistory(t *testing.T) {
+func TestOrchestratorDeploymentL2IdempotencyWindowBlocksRetry(t *testing.T) {
 	req := newReq()
 	now := time.Unix(3000, 0)
 	o := &Orchestrator{
@@ -474,10 +480,40 @@ func TestOrchestratorDeploymentL1FailureIgnoresExistingL2IdempotencyHistory(t *t
 	}
 	o.actionHistory = map[string][]time.Time{req.Spec.Workload.Namespace + "/" + req.Spec.Workload.Name + "/l2": {now.Add(-time.Minute)}}
 	if _, err := o.Process(context.Background(), req); err == nil {
-		t.Fatalf("expected deployment l1 failure")
+		t.Fatalf("expected deployment l2 idempotency failure")
 	}
-	if req.Status.BlockReasonCode != "deployment_l1_failed" {
-		t.Fatalf("expected deployment l1 failure reason, got %s", req.Status.BlockReasonCode)
+	if req.Status.BlockReasonCode != "deployment_l2_idempotency_window" {
+		t.Fatalf("expected deployment l2 idempotency reason, got %s", req.Status.BlockReasonCode)
+	}
+	if req.Status.DeploymentL2Decision != "blocked-by-idempotency-window" {
+		t.Fatalf("expected blocked-by-idempotency-window, got %s", req.Status.DeploymentL2Decision)
+	}
+}
+
+func TestOrchestratorDeploymentL2RollbackFailureRestoreFailureEscalatesToL3(t *testing.T) {
+	req := newReq()
+	now := time.Unix(7000, 0)
+	o := &Orchestrator{
+		Adapter: fakeAdapter{
+			supports:            true,
+			deploymentActionErr: errors.New("l1 failed"),
+			revisions:           []RevisionRecord{{Revision: "rev-ok", UnixTime: now.Unix() - 10, Healthy: true}},
+			rollbackErr:         errors.New("rollback failed"),
+		},
+		Snapshotter: &fakeSnapshotter{restoreErr: errors.New("restore failed")},
+		Now:         func() time.Time { return now },
+	}
+	if _, err := o.Process(context.Background(), req); err == nil {
+		t.Fatalf("expected deployment l2 rollback failure")
+	}
+	if req.Status.Phase != ksv1alpha1.PhaseL3 {
+		t.Fatalf("expected l3 phase, got %s", req.Status.Phase)
+	}
+	if req.Status.SnapshotRestoreResult != "failed" {
+		t.Fatalf("expected failed snapshot restore result, got %s", req.Status.SnapshotRestoreResult)
+	}
+	if req.Status.BlockReasonCode != "rollback_failed_restore_failed" {
+		t.Fatalf("expected rollback_failed_restore_failed, got %s", req.Status.BlockReasonCode)
 	}
 }
 

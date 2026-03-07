@@ -3,6 +3,7 @@ package healing
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -37,6 +38,7 @@ func (d DeploymentAdapter) ListRevisions(ctx context.Context, namespace, name st
 	}
 	deployment := appsv1.Deployment{}
 	if err := d.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, &deployment); err == nil {
+		currentRevision := deployment.Annotations[deploymentRevisionAnnotation]
 		replicaSets, err := d.listDeploymentReplicaSets(ctx, deployment)
 		if err != nil {
 			return nil, err
@@ -47,11 +49,7 @@ func (d DeploymentAdapter) ListRevisions(ctx context.Context, namespace, name st
 			if revision == "" {
 				continue
 			}
-			expectedReplicas := int32(1)
-			if rs.Spec.Replicas != nil {
-				expectedReplicas = *rs.Spec.Replicas
-			}
-			healthy := rs.Status.ReadyReplicas >= expectedReplicas && rs.Status.AvailableReplicas >= 1
+			healthy := isDeploymentRevisionHealthy(rs, currentRevision)
 			records = append(records, RevisionRecord{
 				Revision: revision,
 				UnixTime: rs.CreationTimestamp.Unix(),
@@ -414,6 +412,25 @@ func (d DeploymentAdapter) listDeploymentReplicaSets(ctx context.Context, deploy
 		}
 	}
 	return items, nil
+}
+
+func isDeploymentRevisionHealthy(replicaSet appsv1.ReplicaSet, currentRevision string) bool {
+	revision := replicaSet.Annotations[deploymentRevisionAnnotation]
+	activeReplicas := int32(1)
+	if replicaSet.Spec.Replicas != nil {
+		activeReplicas = *replicaSet.Spec.Replicas
+	}
+	if replicaSet.Status.ReadyReplicas >= activeReplicas && replicaSet.Status.AvailableReplicas >= 1 {
+		return true
+	}
+	if currentRevision != "" && revision == currentRevision {
+		return false
+	}
+	historicalDesiredReplicas, err := strconv.Atoi(replicaSet.Annotations["deployment.kubernetes.io/desired-replicas"])
+	if err != nil {
+		return false
+	}
+	return historicalDesiredReplicas > 0
 }
 
 func ensureStringMap(m map[string]string) map[string]string {

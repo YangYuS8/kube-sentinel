@@ -444,3 +444,13 @@ func (m *Metrics) DeploymentTieredRates() (l1SuccessRate, l2SuccessRate, l3Degra
 
 	return
 }
+
+func (m *Metrics) DeploymentL2Window() (windowSize, failures, degrades int) {
+	if m == nil {
+		return 0, 0, 0
+	}
+	l2Success := atomic.LoadUint64(&m.DeploymentL2Successes)
+	l2Fallback := atomic.LoadUint64(&m.DeploymentL2Fallbacks)
+	l2Degraded := atomic.LoadUint64(&m.DeploymentL2Degrades)
+	return int(l2Success + l2Fallback + l2Degraded), int(l2Fallback), int(l2Degraded)
+}

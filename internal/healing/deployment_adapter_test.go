@@ -45,6 +45,72 @@ func TestDeploymentAdapterListRevisions(t *testing.T) {
 	}
 }
 
+func TestDeploymentAdapterListRevisionsMarksHistoricalScaledDownReplicaSetHealthy(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = appsv1.AddToScheme(scheme)
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "app",
+			Namespace: "default",
+			UID:       types.UID("dep-uid"),
+			Annotations: map[string]string{
+				deploymentRevisionAnnotation: "2",
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "app"}},
+			Template: corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "app"}}},
+		},
+	}
+	oldRS := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "app-rs-1",
+			Namespace: "default",
+			Annotations: map[string]string{
+				deploymentRevisionAnnotation:                "1",
+				"deployment.kubernetes.io/desired-replicas": "1",
+			},
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "app", UID: dep.UID, Controller: ptrBool(true)}},
+		},
+		Spec:   appsv1.ReplicaSetSpec{Replicas: ptrInt32(0)},
+		Status: appsv1.ReplicaSetStatus{ReadyReplicas: 0, AvailableReplicas: 0},
+	}
+	currentRS := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "app-rs-2",
+			Namespace: "default",
+			Annotations: map[string]string{
+				deploymentRevisionAnnotation:                "2",
+				"deployment.kubernetes.io/desired-replicas": "1",
+			},
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: "app", UID: dep.UID, Controller: ptrBool(true)}},
+		},
+		Spec:   appsv1.ReplicaSetSpec{Replicas: ptrInt32(1)},
+		Status: appsv1.ReplicaSetStatus{ReadyReplicas: 1, AvailableReplicas: 1},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(dep, oldRS, currentRS).Build()
+	adapter := NewDeploymentAdapter(cl)
+	revs, err := adapter.ListRevisions(context.Background(), "default", "app")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(revs) != 2 {
+		t.Fatalf("expected two revisions, got %+v", revs)
+	}
+	if !revs[0].Healthy && !revs[1].Healthy {
+		t.Fatalf("expected at least one healthy revision, got %+v", revs)
+	}
+	foundHistoricalHealthy := false
+	for _, revision := range revs {
+		if revision.Revision == "1" && revision.Healthy {
+			foundHistoricalHealthy = true
+		}
+	}
+	if !foundHistoricalHealthy {
+		t.Fatalf("expected scaled-down historical revision to remain rollback-eligible, got %+v", revs)
+	}
+}
+
 func TestDeploymentAdapterRollbackToRevision(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = appsv1.AddToScheme(scheme)
