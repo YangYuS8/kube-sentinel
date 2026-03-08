@@ -1,0 +1,20 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kube-sentinel
+  namespace: kube-sentinel-system
+  labels:
+    app.kubernetes.io/name: kube-sentinel
+    app.kubernetes.io/component: metrics
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kube-sentinel
+      app.kubernetes.io/component: metrics
+  namespaceSelector:
+    matchNames:
+      - kube-sentinel-system
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s

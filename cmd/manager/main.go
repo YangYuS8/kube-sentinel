@@ -40,6 +40,7 @@ func run() error {
 	setupLog := ctrl.Log.WithName("setup")
 	webhookAddr := envOrDefault("KUBE_SENTINEL_WEBHOOK_BIND_ADDRESS", ":8090")
 	webhookPath := envOrDefault("KUBE_SENTINEL_WEBHOOK_PATH", "/alertmanager/webhook")
+	observability.RegisterPrometheusMetrics()
 
 	setupLog.Info("starting kube-sentinel manager", "metricsAddr", metricsAddr, "probeAddr", probeAddr, "webhookAddr", webhookAddr, "webhookPath", webhookPath)
 

@@ -3,6 +3,8 @@ package observability
 import (
 	"testing"
 	"time"
+
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 func TestMetricsIncrement(t *testing.T) {
@@ -48,6 +50,21 @@ func TestMetricsIncrement(t *testing.T) {
 	}
 	if m.Triggers != 1 || m.Success != 1 || m.Failures != 1 || m.Rollbacks != 1 || m.CircuitBreaks != 1 || m.MaintenanceWindowConflicts != 1 || m.Suppressed != 1 || m.ReadOnlyBlocks != 1 || m.StatefulSetFreezeTriggers != 1 || m.StatefulSetL2Successes != 1 || m.StatefulSetL2Fallbacks != 1 || m.StatefulSetL2Degrades != 1 || m.SnapshotCreateSuccesses != 1 || m.SnapshotCreateFailures != 1 || m.SnapshotRestoreSuccesses != 1 || m.SnapshotRestoreFailures != 1 || m.SnapshotCapacityBlocks != 1 || m.SnapshotPruned != 2 || m.DeploymentL1Successes != 1 || m.DeploymentL1Failures != 1 || m.DeploymentL1Blocks != 1 || m.DeploymentL2Successes != 1 || m.DeploymentL2Fallbacks != 1 || m.DeploymentL2Degrades != 1 || m.DeploymentStageBlocks != 1 || m.ProductionGateReports != 2 || m.GateReportMissingFields != 1 || m.ReleaseReadinessSummaries != 2 || m.ReleaseReadinessOverrides != 1 {
 		t.Fatalf("metrics counters not incremented")
+	}
+
+	metricFamilies, err := ctrlmetrics.Registry.Gather()
+	if err != nil {
+		t.Fatalf("gather controller-runtime metrics failed: %v", err)
+	}
+	seen := false
+	for _, family := range metricFamilies {
+		if family.GetName() == "kube_sentinel_triggers_total" {
+			seen = true
+			break
+		}
+	}
+	if !seen {
+		t.Fatalf("expected kube_sentinel_triggers_total to be registered on controller-runtime metrics registry")
 	}
 }
 

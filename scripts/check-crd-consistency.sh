@@ -56,7 +56,7 @@ validate_crd_dir() {
     return 1
   fi
 
-  if ! grep -Eq "^- name: ${CRD_EXPECTED_VERSION}$|^  - name: ${CRD_EXPECTED_VERSION}$" "$crd_file"; then
+  if ! grep -Eq "^- name: ${CRD_EXPECTED_VERSION}$|^  - name: ${CRD_EXPECTED_VERSION}$|^    name: ${CRD_EXPECTED_VERSION}$" "$crd_file"; then
     echo "QUALITY_GATE_RESULT=block"
     echo "QUALITY_GATE_CATEGORY=crd_consistency"
     echo "QUALITY_GATE_REASON=crd_manifest_invalid"

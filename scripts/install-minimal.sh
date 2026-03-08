@@ -91,6 +91,10 @@ wait_for_controller_rollout() {
   fail "controller rollout failed; if you are using minikube, check proxy/registry access or provide a prebuilt image via KUBE_SENTINEL_IMAGE and KUBE_SENTINEL_BUILD_IMAGE=false"
 }
 
+controller_deployment_exists() {
+  kubectl -n "$NAMESPACE" get deployment kube-sentinel >/dev/null 2>&1
+}
+
 build_image_if_needed() {
   if ! bool_is_true "$BUILD_IMAGE"; then
     info "skip image build (KUBE_SENTINEL_BUILD_IMAGE=${BUILD_IMAGE})"
@@ -148,7 +152,15 @@ main() {
   if bool_is_true "$DRY_RUN"; then
     render_manifest
   else
+    local existing_deployment="false"
+    if controller_deployment_exists; then
+      existing_deployment="true"
+    fi
     render_manifest | kubectl apply -f - >/dev/null
+    if [[ "$existing_deployment" == "true" ]]; then
+      info "restarting existing kube-sentinel deployment to pick up refreshed image content"
+      kubectl -n "$NAMESPACE" rollout restart deployment/kube-sentinel >/dev/null
+    fi
     wait_for_controller_rollout
   fi
 

@@ -14,361 +14,384 @@ spec:
     singular: healingrequest
   scope: Namespaced
   versions:
-  - name: v1alpha1
-    schema:
-      openAPIV3Schema:
-        properties:
-          apiVersion:
-            description: |-
-              APIVersion defines the versioned schema of this representation of an object.
-              Servers should convert recognized schemas to the latest internal value, and
-              may reject unrecognized values.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
-            type: string
-          kind:
-            description: |-
-              Kind is a string value representing the REST resource this object represents.
-              Servers may infer this from the endpoint the client submits requests to.
-              Cannot be updated.
-              In CamelCase.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-            type: string
-          metadata:
-            type: object
-          spec:
-            properties:
-              apiContractPolicy:
-                properties:
-                  compatibilityClass:
+    - additionalPrinterColumns:
+        - jsonPath: .spec.workload.name
+          name: Workload
+          type: string
+        - jsonPath: .spec.workload.kind
+          name: Kind
+          type: string
+        - jsonPath: .status.phase
+          name: Phase
+          type: string
+        - jsonPath: .status.lastAction
+          name: Action
+          type: string
+        - jsonPath: .status.blockReasonCode
+          name: Reason
+          type: string
+        - jsonPath: .status.nextRecommendation
+          name: Recommendation
+          type: string
+        - jsonPath: .status.correlationKey
+          name: Correlation
+          type: string
+      name: v1alpha1
+      schema:
+        openAPIV3Schema:
+          properties:
+            apiVersion:
+              description: |-
+                APIVersion defines the versioned schema of this representation of an object.
+                Servers should convert recognized schemas to the latest internal value, and
+                may reject unrecognized values.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+              type: string
+            kind:
+              description: |-
+                Kind is a string value representing the REST resource this object represents.
+                Servers may infer this from the endpoint the client submits requests to.
+                Cannot be updated.
+                In CamelCase.
+                More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+              type: string
+            metadata:
+              type: object
+            spec:
+              properties:
+                apiContractPolicy:
+                  properties:
+                    compatibilityClass:
+                      type: string
+                    migrationPlanRef:
+                      type: string
+                    requireStatusFields:
+                      type: boolean
+                    riskLevel:
+                      type: string
+                    versionBumpWindow:
+                      type: string
+                  type: object
+                blastRadius:
+                  properties:
+                    maxPodPercentage:
+                      type: integer
+                  required:
+                    - maxPodPercentage
+                  type: object
+                circuitBreaker:
+                  properties:
+                    cooldownMinutes:
+                      type: integer
+                    domainFailureThreshold:
+                      type: integer
+                    objectFailureThreshold:
+                      type: integer
+                    scope:
+                      type: string
+                  required:
+                    - cooldownMinutes
+                    - domainFailureThreshold
+                    - objectFailureThreshold
+                    - scope
+                  type: object
+                deploymentPolicy:
+                  properties:
+                    blockRateMaxPercent:
+                      type: integer
+                    l1SuccessRateMinPercent:
+                      type: integer
+                    l2CandidateWindowMinutes:
+                      type: integer
+                    l2MaxDegradeRatePercent:
+                      type: integer
+                    l2SuccessRateMinPercent:
+                      type: integer
+                    l3DegradeRateMaxPercent:
+                      type: integer
+                  type: object
+                emergencyTry:
+                  properties:
+                    enabled:
+                      type: boolean
+                    maxAttempts:
+                      type: integer
+                  required:
+                    - enabled
+                    - maxAttempts
+                  type: object
+                healthyRevision:
+                  properties:
+                    observeMinutes:
+                      type: integer
+                    requireNoCriticalAlerts:
+                      type: boolean
+                  required:
+                    - observeMinutes
+                    - requireNoCriticalAlerts
+                  type: object
+                idempotencyWindowMinutes:
+                  type: integer
+                maintenanceWindows:
+                  items:
                     type: string
-                  migrationPlanRef:
-                    type: string
-                  requireStatusFields:
-                    type: boolean
-                  riskLevel:
-                    type: string
-                  versionBumpWindow:
-                    type: string
-                type: object
-              blastRadius:
-                properties:
-                  maxPodPercentage:
-                    type: integer
-                required:
-                - maxPodPercentage
-                type: object
-              circuitBreaker:
-                properties:
-                  cooldownMinutes:
-                    type: integer
-                  domainFailureThreshold:
-                    type: integer
-                  objectFailureThreshold:
-                    type: integer
-                  scope:
-                    type: string
-                required:
-                - cooldownMinutes
-                - domainFailureThreshold
-                - objectFailureThreshold
-                - scope
-                type: object
-              deploymentPolicy:
-                properties:
-                  blockRateMaxPercent:
-                    type: integer
-                  l1SuccessRateMinPercent:
-                    type: integer
-                  l2CandidateWindowMinutes:
-                    type: integer
-                  l2MaxDegradeRatePercent:
-                    type: integer
-                  l2SuccessRateMinPercent:
-                    type: integer
-                  l3DegradeRateMaxPercent:
-                    type: integer
-                type: object
-              emergencyTry:
-                properties:
-                  enabled:
-                    type: boolean
-                  maxAttempts:
-                    type: integer
-                required:
-                - enabled
-                - maxAttempts
-                type: object
-              healthyRevision:
-                properties:
-                  observeMinutes:
-                    type: integer
-                  requireNoCriticalAlerts:
-                    type: boolean
-                required:
-                - observeMinutes
-                - requireNoCriticalAlerts
-                type: object
-              idempotencyWindowMinutes:
-                type: integer
-              maintenanceWindows:
-                items:
+                  type: array
+                namespaceBudget:
+                  properties:
+                    blockingThresholdPercent:
+                      type: integer
+                    fallbackUnhealthyCount:
+                      type: integer
+                    minTotalWorkloads:
+                      type: integer
+                  required:
+                    - blockingThresholdPercent
+                    - fallbackUnhealthyCount
+                    - minTotalWorkloads
+                  type: object
+                productionGatePolicy:
+                  properties:
+                    failureRatioBlockPercent:
+                      type: integer
+                    sampleWindowMinutes:
+                      type: integer
+                  type: object
+                rateLimit:
+                  properties:
+                    maxActions:
+                      type: integer
+                    windowMinutes:
+                      type: integer
+                  required:
+                    - maxActions
+                    - windowMinutes
+                  type: object
+                snapshotPolicy:
+                  properties:
+                    enabled:
+                      type: boolean
+                    maxSnapshotsPerWorkload:
+                      type: integer
+                    restoreTimeoutSeconds:
+                      type: integer
+                    retentionMinutes:
+                      type: integer
+                  type: object
+                soakTimePolicies:
+                  items:
+                    properties:
+                      category:
+                        type: string
+                      durationSec:
+                        type: integer
+                      minSamples:
+                        type: integer
+                      severity:
+                        type: string
+                    required:
+                      - category
+                      - durationSec
+                      - minSamples
+                      - severity
+                    type: object
+                  type: array
+                statefulSetPolicy:
+                  properties:
+                    allowedNamespaces:
+                      items:
+                        type: string
+                      type: array
+                    approvalAnnotation:
+                      type: string
+                    controlledActionsEnabled:
+                      type: boolean
+                    enabled:
+                      type: boolean
+                    freezeWindowMinutes:
+                      type: integer
+                    l2CandidateWindowMinutes:
+                      type: integer
+                    l2MaxDegradeRatePercent:
+                      type: integer
+                    l2RollbackEnabled:
+                      type: boolean
+                    readOnlyOnly:
+                      type: boolean
+                    requireEvidence:
+                      type: boolean
+                  type: object
+                workload:
+                  properties:
+                    kind:
+                      type: string
+                    name:
+                      type: string
+                    namespace:
+                      type: string
+                  required:
+                    - kind
+                    - name
+                    - namespace
+                  type: object
+              required:
+                - blastRadius
+                - circuitBreaker
+                - emergencyTry
+                - healthyRevision
+                - namespaceBudget
+                - rateLimit
+                - workload
+              type: object
+            status:
+              properties:
+                auditRef:
                   type: string
-                type: array
-              namespaceBudget:
-                properties:
-                  blockingThresholdPercent:
-                    type: integer
-                  fallbackUnhealthyCount:
-                    type: integer
-                  minTotalWorkloads:
-                    type: integer
-                required:
-                - blockingThresholdPercent
-                - fallbackUnhealthyCount
-                - minTotalWorkloads
-                type: object
-              productionGatePolicy:
-                properties:
-                  failureRatioBlockPercent:
-                    type: integer
-                  sampleWindowMinutes:
-                    type: integer
-                type: object
-              rateLimit:
-                properties:
-                  maxActions:
-                    type: integer
-                  windowMinutes:
-                    type: integer
-                required:
-                - maxActions
-                - windowMinutes
-                type: object
-              snapshotPolicy:
-                properties:
-                  enabled:
-                    type: boolean
-                  maxSnapshotsPerWorkload:
-                    type: integer
-                  restoreTimeoutSeconds:
-                    type: integer
-                  retentionMinutes:
-                    type: integer
-                type: object
-              soakTimePolicies:
-                items:
+                blockReasonCode:
+                  type: string
+                circuitBreaker:
                   properties:
-                    category:
-                      type: string
-                    durationSec:
+                    currentDomainFailures:
                       type: integer
-                    minSamples:
+                    currentObjectFailures:
                       type: integer
-                    severity:
+                    domainOpen:
+                      type: boolean
+                    objectOpen:
+                      type: boolean
+                    openReason:
                       type: string
-                  required:
-                  - category
-                  - durationSec
-                  - minSamples
-                  - severity
+                    recoveryAt:
+                      type: string
                   type: object
-                type: array
-              statefulSetPolicy:
-                properties:
-                  allowedNamespaces:
-                    items:
-                      type: string
-                    type: array
-                  approvalAnnotation:
-                    type: string
-                  controlledActionsEnabled:
-                    type: boolean
-                  enabled:
-                    type: boolean
-                  freezeWindowMinutes:
-                    type: integer
-                  l2CandidateWindowMinutes:
-                    type: integer
-                  l2MaxDegradeRatePercent:
-                    type: integer
-                  l2RollbackEnabled:
-                    type: boolean
-                  readOnlyOnly:
-                    type: boolean
-                  requireEvidence:
-                    type: boolean
-                type: object
-              workload:
-                properties:
-                  kind:
-                    type: string
-                  name:
-                    type: string
-                  namespace:
-                    type: string
-                required:
-                - kind
-                - name
-                - namespace
-                type: object
-            required:
-            - blastRadius
-            - circuitBreaker
-            - emergencyTry
-            - healthyRevision
-            - namespaceBudget
-            - rateLimit
-            - workload
-            type: object
-          status:
-            properties:
-              auditRef:
-                type: string
-              blockReasonCode:
-                type: string
-              circuitBreaker:
-                properties:
-                  currentDomainFailures:
-                    type: integer
-                  currentObjectFailures:
-                    type: integer
-                  domainOpen:
-                    type: boolean
-                  objectOpen:
-                    type: boolean
-                  openReason:
-                    type: string
-                  recoveryAt:
-                    type: string
-                type: object
-              conditions:
-                items:
-                  description: Condition contains details for one aspect of the current
-                    state of this API Resource.
-                  properties:
-                    lastTransitionTime:
-                      description: |-
-                        lastTransitionTime is the last time the condition transitioned from one status to another.
-                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
-                      format: date-time
-                      type: string
-                    message:
-                      description: |-
-                        message is a human readable message indicating details about the transition.
-                        This may be an empty string.
-                      maxLength: 32768
-                      type: string
-                    observedGeneration:
-                      description: |-
-                        observedGeneration represents the .metadata.generation that the condition was set based upon.
-                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
-                        with respect to the current state of the instance.
-                      format: int64
-                      minimum: 0
-                      type: integer
-                    reason:
-                      description: |-
-                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
-                        Producers of specific condition types may define expected values and meanings for this field,
-                        and whether the values are considered a guaranteed API.
-                        The value should be a CamelCase string.
-                        This field may not be empty.
-                      maxLength: 1024
-                      minLength: 1
-                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
-                      type: string
-                    status:
-                      description: status of the condition, one of True, False, Unknown.
-                      enum:
-                      - "True"
-                      - "False"
-                      - Unknown
-                      type: string
-                    type:
-                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
-                      maxLength: 316
-                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
-                      type: string
-                  required:
-                  - lastTransitionTime
-                  - message
-                  - reason
-                  - status
-                  - type
-                  type: object
-                type: array
-              correlationKey:
-                type: string
-              deploymentL2Candidate:
-                type: string
-              deploymentL2Decision:
-                type: string
-              deploymentL2Result:
-                type: string
-              emergencyAttempts:
-                type: integer
-              gateEvidenceComplete:
-                type: boolean
-              gateOutcome:
-                type: string
-              gateReasonCode:
-                type: string
-              lastAction:
-                type: string
-              lastError:
-                type: string
-              lastEventReason:
-                type: string
-              lastEvidenceStatus:
-                type: string
-              lastGateDecision:
-                type: string
-              lastHealthyRevision:
-                type: string
-              lastSnapshotId:
-                type: string
-              namespaceBlockRate:
-                type: integer
-              nextRecommendation:
-                type: string
-              observedGeneration:
-                format: int64
-                type: integer
-              pendingSince:
-                type: string
-              phase:
-                type: string
-              shadowAction:
-                type: string
-              snapshotActiveCount:
-                type: integer
-              snapshotFailureReason:
-                type: string
-              snapshotRestoreResult:
-                type: string
-              stableSampleCount:
-                type: integer
-              statefulSetAuthorization:
-                type: string
-              statefulSetFailureReason:
-                type: string
-              statefulSetFreezeState:
-                type: string
-              statefulSetFreezeUntil:
-                type: string
-              statefulSetL2Candidate:
-                type: string
-              statefulSetL2Decision:
-                type: string
-              statefulSetL2Result:
-                type: string
-              suppressedAt:
-                type: string
-              workloadCapability:
-                type: string
-            type: object
-        type: object
-    served: true
-    storage: true
-    subresources:
-      status: {}
+                conditions:
+                  items:
+                    description:
+                      Condition contains details for one aspect of the current
+                      state of this API Resource.
+                    properties:
+                      lastTransitionTime:
+                        description: |-
+                          lastTransitionTime is the last time the condition transitioned from one status to another.
+                          This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                        format: date-time
+                        type: string
+                      message:
+                        description: |-
+                          message is a human readable message indicating details about the transition.
+                          This may be an empty string.
+                        maxLength: 32768
+                        type: string
+                      observedGeneration:
+                        description: |-
+                          observedGeneration represents the .metadata.generation that the condition was set based upon.
+                          For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                          with respect to the current state of the instance.
+                        format: int64
+                        minimum: 0
+                        type: integer
+                      reason:
+                        description: |-
+                          reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                          Producers of specific condition types may define expected values and meanings for this field,
+                          and whether the values are considered a guaranteed API.
+                          The value should be a CamelCase string.
+                          This field may not be empty.
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                        type: string
+                      status:
+                        description: status of the condition, one of True, False, Unknown.
+                        enum:
+                          - 'True'
+                          - 'False'
+                          - Unknown
+                        type: string
+                      type:
+                        description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                        maxLength: 316
+                        pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                        type: string
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    type: object
+                  type: array
+                correlationKey:
+                  type: string
+                deploymentL2Candidate:
+                  type: string
+                deploymentL2Decision:
+                  type: string
+                deploymentL2Result:
+                  type: string
+                emergencyAttempts:
+                  type: integer
+                gateEvidenceComplete:
+                  type: boolean
+                gateOutcome:
+                  type: string
+                gateReasonCode:
+                  type: string
+                lastAction:
+                  type: string
+                lastError:
+                  type: string
+                lastEventReason:
+                  type: string
+                lastEvidenceStatus:
+                  type: string
+                lastGateDecision:
+                  type: string
+                lastHealthyRevision:
+                  type: string
+                lastSnapshotId:
+                  type: string
+                namespaceBlockRate:
+                  type: integer
+                nextRecommendation:
+                  type: string
+                observedGeneration:
+                  format: int64
+                  type: integer
+                pendingSince:
+                  type: string
+                phase:
+                  type: string
+                shadowAction:
+                  type: string
+                snapshotActiveCount:
+                  type: integer
+                snapshotFailureReason:
+                  type: string
+                snapshotRestoreResult:
+                  type: string
+                stableSampleCount:
+                  type: integer
+                statefulSetAuthorization:
+                  type: string
+                statefulSetFailureReason:
+                  type: string
+                statefulSetFreezeState:
+                  type: string
+                statefulSetFreezeUntil:
+                  type: string
+                statefulSetL2Candidate:
+                  type: string
+                statefulSetL2Decision:
+                  type: string
+                statefulSetL2Result:
+                  type: string
+                suppressedAt:
+                  type: string
+                workloadCapability:
+                  type: string
+              type: object
+          type: object
+      served: true
+      storage: true
+      subresources:
+        status: {}

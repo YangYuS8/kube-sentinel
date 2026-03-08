@@ -51,8 +51,13 @@ spec:
       app.kubernetes.io/name: kube-sentinel
   template:
     metadata:
+      annotations:
+        prometheus.io/path: /metrics
+        prometheus.io/port: '8080'
+        prometheus.io/scrape: 'true'
       labels:
         app.kubernetes.io/name: kube-sentinel
+        app.kubernetes.io/component: controller
     spec:
       serviceAccountName: kube-sentinel
       containers:
@@ -93,6 +98,9 @@ kind: Service
 metadata:
   name: kube-sentinel
   namespace: __KUBE_SENTINEL_NAMESPACE__
+  labels:
+    app.kubernetes.io/name: kube-sentinel
+    app.kubernetes.io/component: webhook
 spec:
   selector:
     app.kubernetes.io/name: kube-sentinel
@@ -100,3 +108,23 @@ spec:
     - name: webhook
       port: 8090
       targetPort: webhook
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-sentinel-metrics
+  namespace: __KUBE_SENTINEL_NAMESPACE__
+  labels:
+    app.kubernetes.io/name: kube-sentinel
+    app.kubernetes.io/component: metrics
+  annotations:
+    prometheus.io/path: /metrics
+    prometheus.io/port: '8080'
+    prometheus.io/scrape: 'true'
+spec:
+  selector:
+    app.kubernetes.io/name: kube-sentinel
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: metrics

@@ -200,6 +200,13 @@ type HealingRequestStatus struct {
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Workload",type=string,JSONPath=`.spec.workload.name`
+// +kubebuilder:printcolumn:name="Kind",type=string,JSONPath=`.spec.workload.kind`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Action",type=string,JSONPath=`.status.lastAction`
+// +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.blockReasonCode`
+// +kubebuilder:printcolumn:name="Recommendation",type=string,JSONPath=`.status.nextRecommendation`
+// +kubebuilder:printcolumn:name="Correlation",type=string,JSONPath=`.status.correlationKey`
 type HealingRequest struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -488,6 +495,9 @@ func (r *HealingRequest) ValidateAPIContractRequirements() error {
 func (status HealingRequestStatus) ValidateContractSemantics() error {
 	if status.Phase == "" {
 		return fmt.Errorf("status.phase is required for api contract semantics")
+	}
+	if status.CorrelationKey == "" {
+		return fmt.Errorf("status.correlationKey is required for api contract semantics")
 	}
 	if status.LastAction == "" {
 		return fmt.Errorf("status.lastAction is required for api contract semantics")

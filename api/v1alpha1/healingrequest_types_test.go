@@ -260,6 +260,46 @@ func TestValidateAPICompatibilityPolicyBoundaries(t *testing.T) {
 	}
 }
 
+func TestValidateAPIContractRequirementsRequireCorrelationKey(t *testing.T) {
+	r := baseRequest()
+	r.ApplyDefaults()
+	r.Status = HealingRequestStatus{
+		Phase:              PhaseCompleted,
+		CorrelationKey:     "",
+		LastAction:         "restart-workload",
+		LastGateDecision:   "outcome=allow reason_code=completed stage=completed",
+		NextRecommendation: "continue observing post-action stability",
+	}
+	if err := r.ValidateAPIContractRequirements(); err == nil {
+		t.Fatalf("expected missing correlationKey to fail api contract validation")
+	}
+
+	r.Status.CorrelationKey = "trace-1"
+	if err := r.ValidateAPIContractRequirements(); err != nil {
+		t.Fatalf("expected correlationKey to satisfy api contract validation, got %v", err)
+	}
+}
+
+func TestValidateAPIContractRequirementsBlockedRequiresReason(t *testing.T) {
+	r := baseRequest()
+	r.ApplyDefaults()
+	r.Status = HealingRequestStatus{
+		Phase:              PhaseBlocked,
+		CorrelationKey:     "trace-2",
+		LastAction:         "manual-intervention",
+		LastGateDecision:   "outcome=block reason_code=blocked stage=blocked",
+		NextRecommendation: "manual intervention required",
+	}
+	if err := r.ValidateAPIContractRequirements(); err == nil {
+		t.Fatalf("expected blocked status without reason to fail api contract validation")
+	}
+
+	r.Status.BlockReasonCode = "namespace_budget_blocked"
+	if err := r.ValidateAPIContractRequirements(); err != nil {
+		t.Fatalf("expected blocked status with reason to pass api contract validation, got %v", err)
+	}
+}
+
 func TestValidateStatusContractSemanticsBoundaries(t *testing.T) {
 	r := baseRequest()
 	r.ApplyDefaults()

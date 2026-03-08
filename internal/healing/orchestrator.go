@@ -49,7 +49,7 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 	}()
 	req.ApplyDefaults()
 	defer o.ensureStatusSemantics(req)
-	req.Status.CorrelationKey = req.Annotations["kube-sentinel.io/correlation-key"]
+	req.Status.CorrelationKey = correlationKeyFor(req)
 	req.Status.WorkloadCapability = workloadCapabilityForRequest(req)
 	logger := log.FromContext(ctx).WithValues(
 		"workloadNamespace", req.Spec.Workload.Namespace,
@@ -674,6 +674,9 @@ func (o *Orchestrator) ensureStatusSemantics(req *ksv1alpha1.HealingRequest) {
 	if req == nil {
 		return
 	}
+	if req.Status.CorrelationKey == "" {
+		req.Status.CorrelationKey = correlationKeyFor(req)
+	}
 	o.normalizeStatusForPhase(req)
 	if req.Status.LastAction == "" {
 		switch req.Status.Phase {
@@ -740,6 +743,25 @@ func (o *Orchestrator) ensureStatusSemantics(req *ksv1alpha1.HealingRequest) {
 	if req.Status.LastError == "" && (req.Status.Phase == ksv1alpha1.PhaseBlocked || req.Status.Phase == ksv1alpha1.PhaseL3) && req.Status.BlockReasonCode != "" {
 		req.Status.LastError = strings.ReplaceAll(req.Status.BlockReasonCode, "_", " ")
 	}
+}
+
+func correlationKeyFor(req *ksv1alpha1.HealingRequest) string {
+	if req == nil {
+		return ""
+	}
+	if key := req.Status.CorrelationKey; key != "" {
+		return key
+	}
+	if key := req.Annotations["kube-sentinel.io/correlation-key"]; key != "" {
+		return key
+	}
+	if req.Namespace != "" && req.Name != "" {
+		return req.Namespace + "/" + req.Name
+	}
+	if req.Spec.Workload.Namespace != "" && req.Spec.Workload.Name != "" {
+		return req.Spec.Workload.Namespace + "/" + req.Spec.Workload.Name
+	}
+	return ""
 }
 
 func (o *Orchestrator) normalizeStatusForPhase(req *ksv1alpha1.HealingRequest) {

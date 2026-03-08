@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 type Metrics struct {
@@ -151,9 +152,9 @@ var (
 	})
 )
 
-func registerPrometheusMetrics() {
+func RegisterPrometheusMetrics() {
 	registerMetricsOnce.Do(func() {
-		prometheus.MustRegister(
+		ctrlmetrics.Registry.MustRegister(
 			triggersCounter,
 			successCounter,
 			failuresCounter,
@@ -185,44 +186,44 @@ func registerPrometheusMetrics() {
 }
 
 func (m *Metrics) IncTriggers() {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	atomic.AddUint64(&m.Triggers, 1)
 	triggersCounter.Inc()
 }
 func (m *Metrics) IncSuccess() {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	atomic.AddUint64(&m.Success, 1)
 	successCounter.Inc()
 }
 func (m *Metrics) IncFailures() {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	atomic.AddUint64(&m.Failures, 1)
 	failuresCounter.Inc()
 }
 func (m *Metrics) IncRollbacks() {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	atomic.AddUint64(&m.Rollbacks, 1)
 	rollbacksCounter.Inc()
 }
 func (m *Metrics) IncCircuitBreaks() {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	atomic.AddUint64(&m.CircuitBreaks, 1)
 	circuitBreaksCounter.Inc()
 }
 func (m *Metrics) IncMaintenanceWindowConflicts() {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	atomic.AddUint64(&m.MaintenanceWindowConflicts, 1)
 	maintenanceWindowConflictsCounter.Inc()
 }
 
 func (m *Metrics) IncSuppressed() {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	atomic.AddUint64(&m.Suppressed, 1)
 	suppressedCounter.Inc()
 }
 
 func (m *Metrics) IncReadOnlyBlocks(reason, workloadKind string) {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	atomic.AddUint64(&m.ReadOnlyBlocks, 1)
 	if reason == "" {
 		reason = "unknown"
@@ -234,7 +235,7 @@ func (m *Metrics) IncReadOnlyBlocks(reason, workloadKind string) {
 }
 
 func (m *Metrics) IncStatefulSetControlledAction(workloadKind, actionType, decision, freezeState string) {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	if workloadKind == "" {
 		workloadKind = "unknown"
 	}
@@ -251,13 +252,13 @@ func (m *Metrics) IncStatefulSetControlledAction(workloadKind, actionType, decis
 }
 
 func (m *Metrics) IncStatefulSetFreezeTriggers() {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	atomic.AddUint64(&m.StatefulSetFreezeTriggers, 1)
 	statefulSetFreezeTriggersCounter.Inc()
 }
 
 func (m *Metrics) IncStatefulSetL2Result(result string) {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	if result == "" {
 		result = "unknown"
 	}
@@ -273,31 +274,31 @@ func (m *Metrics) IncStatefulSetL2Result(result string) {
 }
 
 func (m *Metrics) IncSnapshotCreateSuccess() {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	atomic.AddUint64(&m.SnapshotCreateSuccesses, 1)
 	snapshotCreateCounter.WithLabelValues("success").Inc()
 }
 
 func (m *Metrics) IncSnapshotCreateFailure() {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	atomic.AddUint64(&m.SnapshotCreateFailures, 1)
 	snapshotCreateCounter.WithLabelValues("failure").Inc()
 }
 
 func (m *Metrics) IncSnapshotRestoreSuccess() {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	atomic.AddUint64(&m.SnapshotRestoreSuccesses, 1)
 	snapshotRestoreCounter.WithLabelValues("success").Inc()
 }
 
 func (m *Metrics) IncSnapshotRestoreFailure() {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	atomic.AddUint64(&m.SnapshotRestoreFailures, 1)
 	snapshotRestoreCounter.WithLabelValues("failure").Inc()
 }
 
 func (m *Metrics) IncSnapshotCapacityBlock() {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	atomic.AddUint64(&m.SnapshotCapacityBlocks, 1)
 	snapshotCapacityBlocksCounter.Inc()
 }
@@ -306,13 +307,13 @@ func (m *Metrics) AddSnapshotPruned(count int) {
 	if count <= 0 {
 		return
 	}
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	atomic.AddUint64(&m.SnapshotPruned, uint64(count))
 	snapshotPrunedCounter.Add(float64(count))
 }
 
 func (m *Metrics) SetSnapshotActive(count int) {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	if count < 0 {
 		count = 0
 	}
@@ -320,17 +321,17 @@ func (m *Metrics) SetSnapshotActive(count int) {
 }
 
 func (m *Metrics) ObserveSnapshotRestoreDuration(duration time.Duration) {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	snapshotRestoreDurationHistogram.Observe(duration.Seconds())
 }
 
 func (m *Metrics) ObserveStrategyDuration(stage string, duration time.Duration) {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	strategyDurationHistogram.WithLabelValues(stage).Observe(duration.Seconds())
 }
 
 func (m *Metrics) IncDeploymentL1Result(result string) {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	if result == "" {
 		result = "unknown"
 	}
@@ -346,7 +347,7 @@ func (m *Metrics) IncDeploymentL1Result(result string) {
 }
 
 func (m *Metrics) IncDeploymentL2Result(result string) {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	if result == "" {
 		result = "unknown"
 	}
@@ -362,7 +363,7 @@ func (m *Metrics) IncDeploymentL2Result(result string) {
 }
 
 func (m *Metrics) IncDeploymentStageBlock(reason string) {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	if reason == "" {
 		reason = "unknown"
 	}
@@ -371,7 +372,7 @@ func (m *Metrics) IncDeploymentStageBlock(reason string) {
 }
 
 func (m *Metrics) IncProductionGateReport(complete bool) {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	atomic.AddUint64(&m.ProductionGateReports, 1)
 	productionGateReportsCounter.Inc()
 	if !complete {
@@ -381,14 +382,14 @@ func (m *Metrics) IncProductionGateReport(complete bool) {
 }
 
 func (m *Metrics) IncReleaseReadinessSummary(decision string) {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	decision = sanitizeReleaseDecisionLabel(decision)
 	atomic.AddUint64(&m.ReleaseReadinessSummaries, 1)
 	releaseReadinessSummaryCounter.WithLabelValues(decision).Inc()
 }
 
 func (m *Metrics) SetReleaseReadinessStaleness(seconds int) {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	if seconds < 0 {
 		seconds = 0
 	}
@@ -396,7 +397,7 @@ func (m *Metrics) SetReleaseReadinessStaleness(seconds int) {
 }
 
 func (m *Metrics) IncReleaseReadinessOverride() {
-	registerPrometheusMetrics()
+	RegisterPrometheusMetrics()
 	atomic.AddUint64(&m.ReleaseReadinessOverrides, 1)
 	releaseReadinessOverrideCounter.Inc()
 }
