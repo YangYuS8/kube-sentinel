@@ -129,6 +129,21 @@ bash ./scripts/install-minimal.sh
 KUBE_SENTINEL_INSTALL_DRY_RUN=true bash ./scripts/install-minimal.sh
 ```
 
+如果你不需要验证本地未发布改动，而是希望直接部署官方预构建镜像，可以跳过本地 build：
+
+```bash
+KUBE_SENTINEL_IMAGE=ghcr.io/yangyus8/kube-sentinel:v0.1.0 \
+KUBE_SENTINEL_BUILD_IMAGE=false \
+bash ./scripts/install-minimal.sh
+```
+
+官方镜像使用边界：
+
+- `ghcr.io/yangyus8/kube-sentinel:vX.Y.Z`：稳定版，适合共享测试环境或可重复部署场景。
+- `ghcr.io/yangyus8/kube-sentinel:latest`：始终指向最近一次稳定版发布，不承载预发布结果。
+- `ghcr.io/yangyus8/kube-sentinel:vX.Y.Z-rc.N` / `-beta.N`：预发布镜像，仅用于联调和发布前验证。
+- `kube-sentinel/controller:latest`：本地构建默认镜像，仅用于当前工作区快速迭代，不应作为共享环境基线。
+
 ### 3. 准备本地集群上下文
 
 如果你使用 minikube，本地启动前先确认当前 kube context 已经指向它：

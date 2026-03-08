@@ -156,6 +156,23 @@ func TestValuesYamlDefaultsToDeploymentWorkloadKind(t *testing.T) {
 	}
 }
 
+func TestValuesYamlIncludesOfficialImageDefaults(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("values.yaml"))
+	if err != nil {
+		t.Fatalf("read values yaml failed: %v", err)
+	}
+	content := string(raw)
+	for _, token := range []string{
+		"image:",
+		"repository: ghcr.io/yangyus8/kube-sentinel",
+		"tag: latest",
+	} {
+		if !strings.Contains(content, token) {
+			t.Fatalf("values.yaml missing %s", token)
+		}
+	}
+}
+
 func TestValuesSchemaIncludesDeliveryPipeline(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("values.schema.json"))
 	if err != nil {

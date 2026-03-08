@@ -1,5 +1,5 @@
 image:
-  repository: kube-sentinel/controller
+  repository: ghcr.io/yangyus8/kube-sentinel
   tag: latest
 
 webhook:
