@@ -23,6 +23,11 @@
 9. 启用 StatefulSet Phase 2 时，必须同时配置：`controlledActionsEnabled=true`、`allowedNamespaces`、`approvalAnnotation`、`freezeWindowMinutes`。
 10. 灰度期间必须观测以下阈值：误动作率 < 1%、Deployment L2 回退率 < 5%、冻结触发率 < 5%。任一越线立即回退只读。
 11. 启用 StatefulSet Phase 3（L2）时，必须同时开启 `statefulSetPolicy.l2RollbackEnabled=true`，并校验 L2 候选窗口与降级阈值参数。
+    补充：StatefulSet Phase 3 灰度前，先执行 `KUBE_SENTINEL_MINIKUBE_STATEFULSET_REALITY=true bash ./scripts/drill-statefulset-reality.sh default`。
+
+- 通过标准：输出包含 `STATEFULSET_REALITY_CONTEXT=minikube`、`STATEFULSET_REALITY_TEST_PATTERN`、`STATEFULSET_REALITY_RESULT=pass`。
+- 可接受跳过：未显式启用、缺失前置二进制、或当前上下文不是 `minikube` 时，输出 `STATEFULSET_REALITY_RESULT=skip` 与原因。
+
 12. Phase 3 灰度期间重点观测：L2 成功率、L2 失败回退率、L2 降级率；任一连续窗口越线应关闭 L2。
 13. 启用持久快照时，必须配置 `snapshotPolicy.retentionMinutes`、`snapshotPolicy.restoreTimeoutSeconds`、`snapshotPolicy.maxSnapshotsPerWorkload` 并先在白名单命名空间灰度。
 14. 快照灰度期间重点观测：`kube_sentinel_snapshot_creates_total{result="failure"}`、`kube_sentinel_snapshot_restores_total{result="failure"}`、`kube_sentinel_snapshot_restore_duration_seconds`。

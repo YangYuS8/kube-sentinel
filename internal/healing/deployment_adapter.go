@@ -2,6 +2,7 @@ package healing
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
@@ -85,7 +86,7 @@ func (d DeploymentAdapter) ListRevisions(ctx context.Context, namespace, name st
 		if revisionName == "" {
 			revisionName = fmt.Sprintf("rev-%d", revision.Revision)
 		}
-		healthy := statefulSet.Status.ReadyReplicas >= expectedReplicas
+		healthy := statefulSet.Status.ReadyReplicas >= expectedReplicas && revisionName != statefulSet.Status.CurrentRevision && revisionName != statefulSet.Status.UpdateRevision
 		records = append(records, RevisionRecord{
 			Revision: revisionName,
 			UnixTime: revision.CreationTimestamp.Unix(),
@@ -130,24 +131,28 @@ func (d DeploymentAdapter) RollbackToRevision(ctx context.Context, namespace, na
 	if err != nil {
 		return err
 	}
-	found := false
-	for _, controllerRevision := range revisions {
-		if controllerRevision.Name == revision {
-			found = true
-			break
-		}
-	}
-	if !found {
+	targetRevision := findStatefulSetControllerRevision(revisions, revision)
+	if targetRevision == nil {
 		return fmt.Errorf("revision %s not found for statefulset %s/%s", revision, namespace, name)
+	}
+	targetTemplate, targetUpdateStrategy, err := extractStatefulSetRevisionData(*targetRevision)
+	if err != nil {
+		return err
 	}
 	statefulSet.Annotations = ensureStringMap(statefulSet.Annotations)
 	statefulSet.Annotations["kube-sentinel.io/rollback-target-revision"] = revision
-	statefulSet.Spec.UpdateStrategy = appsv1.StatefulSetUpdateStrategy{Type: appsv1.RollingUpdateStatefulSetStrategyType}
-	if statefulSet.Spec.UpdateStrategy.RollingUpdate == nil {
-		statefulSet.Spec.UpdateStrategy.RollingUpdate = &appsv1.RollingUpdateStatefulSetStrategy{}
+	statefulSet.Spec.Template = *targetTemplate.DeepCopy()
+	if targetUpdateStrategy != nil {
+		statefulSet.Spec.UpdateStrategy = *targetUpdateStrategy.DeepCopy()
 	}
-	partition := int32(0)
-	statefulSet.Spec.UpdateStrategy.RollingUpdate.Partition = &partition
+	if statefulSet.Spec.UpdateStrategy.Type == "" || statefulSet.Spec.UpdateStrategy.Type == appsv1.RollingUpdateStatefulSetStrategyType {
+		statefulSet.Spec.UpdateStrategy.Type = appsv1.RollingUpdateStatefulSetStrategyType
+		if statefulSet.Spec.UpdateStrategy.RollingUpdate == nil {
+			statefulSet.Spec.UpdateStrategy.RollingUpdate = &appsv1.RollingUpdateStatefulSetStrategy{}
+		}
+		partition := int32(0)
+		statefulSet.Spec.UpdateStrategy.RollingUpdate.Partition = &partition
+	}
 	return d.Client.Update(ctx, &statefulSet)
 }
 
@@ -218,37 +223,7 @@ func (d DeploymentAdapter) ValidateRevisionDependencies(ctx context.Context, nam
 			if rs.Annotations[deploymentRevisionAnnotation] != revision {
 				continue
 			}
-			for _, volume := range rs.Spec.Template.Spec.Volumes {
-				if volume.ConfigMap != nil && volume.ConfigMap.Name != "" {
-					obj := corev1.ConfigMap{}
-					if err := d.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: volume.ConfigMap.Name}, &obj); err != nil {
-						return fmt.Errorf("configmap dependency missing: %s", volume.ConfigMap.Name)
-					}
-				}
-				if volume.Secret != nil && volume.Secret.SecretName != "" {
-					obj := corev1.Secret{}
-					if err := d.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: volume.Secret.SecretName}, &obj); err != nil {
-						return fmt.Errorf("secret dependency missing: %s", volume.Secret.SecretName)
-					}
-				}
-			}
-			for _, container := range rs.Spec.Template.Spec.Containers {
-				for _, envFrom := range container.EnvFrom {
-					if envFrom.ConfigMapRef != nil && envFrom.ConfigMapRef.Name != "" {
-						obj := corev1.ConfigMap{}
-						if err := d.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: envFrom.ConfigMapRef.Name}, &obj); err != nil {
-							return fmt.Errorf("configmap dependency missing: %s", envFrom.ConfigMapRef.Name)
-						}
-					}
-					if envFrom.SecretRef != nil && envFrom.SecretRef.Name != "" {
-						obj := corev1.Secret{}
-						if err := d.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: envFrom.SecretRef.Name}, &obj); err != nil {
-							return fmt.Errorf("secret dependency missing: %s", envFrom.SecretRef.Name)
-						}
-					}
-				}
-			}
-			return nil
+			return d.validateTemplateDependencies(ctx, namespace, rs.Spec.Template)
 		}
 		return fmt.Errorf("revision %s not found for deployment %s/%s", revision, namespace, name)
 	} else if !apierrors.IsNotFound(err) {
@@ -262,48 +237,15 @@ func (d DeploymentAdapter) ValidateRevisionDependencies(ctx context.Context, nam
 	if err != nil {
 		return err
 	}
-	revisionFound := false
-	for _, controllerRevision := range revisions {
-		if controllerRevision.Name != revision {
-			continue
-		}
-		revisionFound = true
-		break
-	}
-	if !revisionFound {
+	targetRevision := findStatefulSetControllerRevision(revisions, revision)
+	if targetRevision == nil {
 		return fmt.Errorf("revision %s not found for statefulset %s/%s", revision, namespace, name)
 	}
-	for _, volume := range statefulSet.Spec.Template.Spec.Volumes {
-		if volume.ConfigMap != nil && volume.ConfigMap.Name != "" {
-			obj := corev1.ConfigMap{}
-			if err := d.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: volume.ConfigMap.Name}, &obj); err != nil {
-				return fmt.Errorf("configmap dependency missing: %s", volume.ConfigMap.Name)
-			}
-		}
-		if volume.Secret != nil && volume.Secret.SecretName != "" {
-			obj := corev1.Secret{}
-			if err := d.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: volume.Secret.SecretName}, &obj); err != nil {
-				return fmt.Errorf("secret dependency missing: %s", volume.Secret.SecretName)
-			}
-		}
+	targetTemplate, _, err := extractStatefulSetRevisionData(*targetRevision)
+	if err != nil {
+		return err
 	}
-	for _, container := range statefulSet.Spec.Template.Spec.Containers {
-		for _, envFrom := range container.EnvFrom {
-			if envFrom.ConfigMapRef != nil && envFrom.ConfigMapRef.Name != "" {
-				obj := corev1.ConfigMap{}
-				if err := d.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: envFrom.ConfigMapRef.Name}, &obj); err != nil {
-					return fmt.Errorf("configmap dependency missing: %s", envFrom.ConfigMapRef.Name)
-				}
-			}
-			if envFrom.SecretRef != nil && envFrom.SecretRef.Name != "" {
-				obj := corev1.Secret{}
-				if err := d.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: envFrom.SecretRef.Name}, &obj); err != nil {
-					return fmt.Errorf("secret dependency missing: %s", envFrom.SecretRef.Name)
-				}
-			}
-		}
-	}
-	return nil
+	return d.validateTemplateDependencies(ctx, namespace, *targetTemplate)
 }
 
 func (d DeploymentAdapter) CountAffectedPods(ctx context.Context, namespace, name string) (int, error) {
@@ -438,6 +380,72 @@ func ensureStringMap(m map[string]string) map[string]string {
 		return map[string]string{}
 	}
 	return m
+}
+
+type statefulSetRevisionPatch struct {
+	Spec *statefulSetRevisionSpecPatch `json:"spec,omitempty"`
+}
+
+type statefulSetRevisionSpecPatch struct {
+	Template       *corev1.PodTemplateSpec           `json:"template,omitempty"`
+	UpdateStrategy *appsv1.StatefulSetUpdateStrategy `json:"updateStrategy,omitempty"`
+}
+
+func extractStatefulSetRevisionData(controllerRevision appsv1.ControllerRevision) (*corev1.PodTemplateSpec, *appsv1.StatefulSetUpdateStrategy, error) {
+	if len(controllerRevision.Data.Raw) == 0 {
+		return nil, nil, fmt.Errorf("statefulset revision %s payload is empty", controllerRevision.Name)
+	}
+	patch := statefulSetRevisionPatch{}
+	if err := json.Unmarshal(controllerRevision.Data.Raw, &patch); err != nil {
+		return nil, nil, fmt.Errorf("decode statefulset revision %s payload: %w", controllerRevision.Name, err)
+	}
+	if patch.Spec == nil || patch.Spec.Template == nil {
+		return nil, nil, fmt.Errorf("statefulset revision %s template payload is missing", controllerRevision.Name)
+	}
+	return patch.Spec.Template, patch.Spec.UpdateStrategy, nil
+}
+
+func findStatefulSetControllerRevision(revisions []appsv1.ControllerRevision, revision string) *appsv1.ControllerRevision {
+	for i := range revisions {
+		if revisions[i].Name == revision {
+			return &revisions[i]
+		}
+	}
+	return nil
+}
+
+func (d DeploymentAdapter) validateTemplateDependencies(ctx context.Context, namespace string, template corev1.PodTemplateSpec) error {
+	for _, volume := range template.Spec.Volumes {
+		if volume.ConfigMap != nil && volume.ConfigMap.Name != "" {
+			obj := corev1.ConfigMap{}
+			if err := d.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: volume.ConfigMap.Name}, &obj); err != nil {
+				return fmt.Errorf("configmap dependency missing: %s", volume.ConfigMap.Name)
+			}
+		}
+		if volume.Secret != nil && volume.Secret.SecretName != "" {
+			obj := corev1.Secret{}
+			if err := d.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: volume.Secret.SecretName}, &obj); err != nil {
+				return fmt.Errorf("secret dependency missing: %s", volume.Secret.SecretName)
+			}
+		}
+	}
+	for _, container := range template.Spec.Containers {
+		for _, envFrom := range container.EnvFrom {
+			if envFrom.ConfigMapRef != nil && envFrom.ConfigMapRef.Name != "" {
+				obj := corev1.ConfigMap{}
+				if err := d.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: envFrom.ConfigMapRef.Name}, &obj); err != nil {
+					return fmt.Errorf("configmap dependency missing: %s", envFrom.ConfigMapRef.Name)
+				}
+			}
+			if envFrom.SecretRef != nil && envFrom.SecretRef.Name != "" {
+				obj := corev1.Secret{}
+				if err := d.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: envFrom.SecretRef.Name}, &obj); err != nil {
+					return fmt.Errorf("secret dependency missing: %s", envFrom.SecretRef.Name)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (d DeploymentAdapter) listStatefulSetControllerRevisions(ctx context.Context, statefulSet appsv1.StatefulSet) ([]appsv1.ControllerRevision, error) {

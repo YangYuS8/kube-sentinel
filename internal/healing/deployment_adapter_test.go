@@ -2,6 +2,8 @@ package healing
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -212,6 +214,141 @@ func TestDeploymentAdapterValidateRevisionDependencies(t *testing.T) {
 	}
 }
 
+func TestDeploymentAdapterListRevisionsExcludesCurrentStatefulSetRevisionFromHealthyCandidates(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = appsv1.AddToScheme(scheme)
+	statefulSet := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default", UID: types.UID("sts-uid")},
+		Spec:       appsv1.StatefulSetSpec{Replicas: ptrInt32(1)},
+		Status: appsv1.StatefulSetStatus{
+			ReadyReplicas:   1,
+			CurrentRevision: "app-rev-2",
+			UpdateRevision:  "app-rev-2",
+		},
+	}
+	current := newStatefulSetControllerRevision(t, statefulSet, "app-rev-2", 2, corev1.PodTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"kube-sentinel.io/test-rev": "2"}},
+	})
+	historical := newStatefulSetControllerRevision(t, statefulSet, "app-rev-1", 1, corev1.PodTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"kube-sentinel.io/test-rev": "1"}},
+	})
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(statefulSet, current, historical).Build()
+	adapter := NewDeploymentAdapter(cl)
+	revs, err := adapter.ListRevisions(context.Background(), "default", "app")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(revs) != 2 {
+		t.Fatalf("expected two revisions, got %+v", revs)
+	}
+	for _, revision := range revs {
+		switch revision.Revision {
+		case "app-rev-2":
+			if revision.Healthy {
+				t.Fatalf("expected current statefulset revision to be excluded from healthy rollback candidates, got %+v", revs)
+			}
+		case "app-rev-1":
+			if !revision.Healthy {
+				t.Fatalf("expected historical statefulset revision to remain rollback eligible, got %+v", revs)
+			}
+		}
+	}
+}
+
+func TestDeploymentAdapterRollbackToRevisionRestoresStatefulSetTemplate(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = appsv1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+	statefulSet := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default", UID: types.UID("sts-uid")},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas:    ptrInt32(1),
+			ServiceName: "app",
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"kube-sentinel.io/test-rev": "2"}},
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{
+					Name:  "app",
+					Image: "nginx:1.27-alpine",
+					EnvFrom: []corev1.EnvFromSource{{
+						ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "cfg-v2"}},
+					}},
+				}}},
+			},
+			UpdateStrategy: appsv1.StatefulSetUpdateStrategy{Type: appsv1.RollingUpdateStatefulSetStrategyType},
+		},
+	}
+	revision := newStatefulSetControllerRevision(t, statefulSet, "app-rev-1", 1, corev1.PodTemplateSpec{
+		ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"kube-sentinel.io/test-rev": "1"}},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name:  "app",
+			Image: "nginx:1.27-alpine",
+			EnvFrom: []corev1.EnvFromSource{{
+				ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "cfg-v1"}},
+			}},
+		}}},
+	})
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(statefulSet, revision).Build()
+	adapter := NewDeploymentAdapter(cl)
+	if err := adapter.RollbackToRevision(context.Background(), "default", "app", "app-rev-1"); err != nil {
+		t.Fatalf("unexpected rollback err: %v", err)
+	}
+	updated := &appsv1.StatefulSet{}
+	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "app"}, updated); err != nil {
+		t.Fatalf("get updated statefulset failed: %v", err)
+	}
+	if got := updated.Spec.Template.Annotations["kube-sentinel.io/test-rev"]; got != "1" {
+		t.Fatalf("expected statefulset template rollback to rev 1, got %s", got)
+	}
+	if len(updated.Spec.Template.Spec.Containers) == 0 || len(updated.Spec.Template.Spec.Containers[0].EnvFrom) == 0 || updated.Spec.Template.Spec.Containers[0].EnvFrom[0].ConfigMapRef == nil {
+		t.Fatalf("expected statefulset envFrom to be restored from controller revision")
+	}
+	if got := updated.Spec.Template.Spec.Containers[0].EnvFrom[0].ConfigMapRef.Name; got != "cfg-v1" {
+		t.Fatalf("expected rollback to cfg-v1, got %s", got)
+	}
+	if got := updated.Annotations["kube-sentinel.io/rollback-target-revision"]; got != "app-rev-1" {
+		t.Fatalf("expected rollback target annotation to be recorded, got %s", got)
+	}
+	if updated.Spec.UpdateStrategy.Type != appsv1.RollingUpdateStatefulSetStrategyType || updated.Spec.UpdateStrategy.RollingUpdate == nil || updated.Spec.UpdateStrategy.RollingUpdate.Partition == nil || *updated.Spec.UpdateStrategy.RollingUpdate.Partition != 0 {
+		t.Fatalf("expected rollback to retain a full rolling update strategy, got %+v", updated.Spec.UpdateStrategy)
+	}
+}
+
+func TestDeploymentAdapterValidateRevisionDependenciesUsesTargetStatefulSetRevision(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = appsv1.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+	statefulSet := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "default", UID: types.UID("sts-uid")},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: ptrInt32(1),
+			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+				Name:  "app",
+				Image: "nginx:1.27-alpine",
+				EnvFrom: []corev1.EnvFromSource{{
+					ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "cfg-v2"}},
+				}},
+			}}}},
+		},
+	}
+	revision := newStatefulSetControllerRevision(t, statefulSet, "app-rev-1", 1, corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Name:  "app",
+		Image: "nginx:1.27-alpine",
+		EnvFrom: []corev1.EnvFromSource{{
+			ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "cfg-v1"}},
+		}},
+	}}}})
+	cfgV2 := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "cfg-v2", Namespace: "default"}}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(statefulSet, revision, cfgV2).Build()
+	adapter := NewDeploymentAdapter(cl)
+	err := adapter.ValidateRevisionDependencies(context.Background(), "default", "app", "app-rev-1")
+	if err == nil {
+		t.Fatalf("expected missing target revision dependency to fail")
+	}
+	if !strings.Contains(err.Error(), "cfg-v1") {
+		t.Fatalf("expected missing dependency to reference cfg-v1, got %v", err)
+	}
+}
+
 func TestDeploymentAdapterCountWorkloads(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = appsv1.AddToScheme(scheme)
@@ -228,6 +365,34 @@ func TestDeploymentAdapterCountWorkloads(t *testing.T) {
 	unhealthy, err := adapter.CountUnhealthyWorkloads(context.Background(), "default")
 	if err != nil || unhealthy != 1 {
 		t.Fatalf("expected unhealthy workloads 1, got %d err=%v", unhealthy, err)
+	}
+}
+
+func newStatefulSetControllerRevision(t *testing.T, statefulSet *appsv1.StatefulSet, name string, revision int64, template corev1.PodTemplateSpec) *appsv1.ControllerRevision {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"spec": map[string]any{
+			"template":       template,
+			"updateStrategy": appsv1.StatefulSetUpdateStrategy{Type: appsv1.RollingUpdateStatefulSetStrategyType},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal controller revision payload: %v", err)
+	}
+	return &appsv1.ControllerRevision{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: statefulSet.Namespace,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1",
+				Kind:       "StatefulSet",
+				Name:       statefulSet.Name,
+				UID:        statefulSet.UID,
+				Controller: ptrBool(true),
+			}},
+		},
+		Revision: revision,
+		Data:     runtime.RawExtension{Raw: raw},
 	}
 }
 

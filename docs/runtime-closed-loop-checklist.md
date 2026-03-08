@@ -6,6 +6,7 @@
 - 目标 Deployment 存在且可识别
 - HealingRequest CRD 已安装
 - 统一质量门禁已执行：`make quality-gate`
+- 如需执行 StatefulSet 真实性验证，必须显式设置 `KUBE_SENTINEL_MINIKUBE_STATEFULSET_REALITY=true`；默认未启用时允许脚本与集成测试清晰跳过
 - 如需校验预提交与 CI 语义一致性，需同时提供 `PRECOMMIT_GATE_OUTCOME` 与 `CI_GATE_OUTCOME`
 - 如需校验门禁与 SLO 治理语义一致性，可提供 `SLO_GOVERNANCE_OUTCOME`
 
@@ -23,6 +24,8 @@
 - 自动写动作前必须生成 `status.lastSnapshotId`
 - 回滚失败时必须记录 `status.snapshotRestoreResult`（`success` 或 `failed`）
 - 本地 smoke 脚本必须覆盖默认 `block` 与单次放宽后的 `allow` 路径；`degrade` 语义继续由单元测试与发布门禁校验覆盖
+- StatefulSet 真实性验证入口必须区分 Deployment smoke 与 StatefulSet reality：`bash ./scripts/drill-statefulset-reality.sh default` 仅在显式启用后运行，输出至少包含 `STATEFULSET_REALITY_CONTEXT`、`STATEFULSET_REALITY_TEST_PATTERN`、`STATEFULSET_REALITY_RESULT`
+- StatefulSet 真实性验证通过标准：必须覆盖历史候选存在、历史候选缺失，以及 L2 回滚失败后的冻结/快照恢复证据
 - 演练脚本必须输出 incident 证据：级别、恢复条件、runbook 标识
 - 演练脚本必须输出灰度闭环证据：`rollout.canaryStable`、`rollout.rollbackHit`、`rollout.tuningApproved`、`rollout.recoveryObserved`
 - 演练脚本必须校验复盘字段：`postmortem.breachReason`、`postmortem.mitigationAction`、`postmortem.thresholdDecision`、`postmortem.observationPlan`
@@ -46,6 +49,7 @@
 - 门禁语义与 SLO 治理语义不一致时必须阻断验收
 - 恢复条件未满足时即使检查项通过也必须阻断放量（`QUALITY_GATE_RECOVERY_READY=false`）
 - 本地 smoke 中对 `blastRadius` 的放宽必须仅作用于当前 `HealingRequest`，不得回写 chart 默认值或生产配置
+- 未显式启用 StatefulSet 真实性验证、缺失 `kubectl/go`、或当前上下文不是 `minikube` 时，`scripts/drill-statefulset-reality.sh` 必须输出 `STATEFULSET_REALITY_RESULT=skip` 与可诊断原因，禁止静默成功
 - 兼容性分类非法、迁移路径缺失或高风险未审批时必须阻断放量
 - API/CRD/Helm 任一约束未同步时必须阻断 CI 与质量门禁
 - 非法状态迁移（如 `pilot_prepare -> cutover_done`）必须阻断并输出 `invalid_stage_transition`
