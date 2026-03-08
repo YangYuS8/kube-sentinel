@@ -46,6 +46,7 @@
     "helm": true,
     "kubectl -n monitoring": true,
     "kubectl logs": true,
-    "kubectl port-forward": true
+    "kubectl port-forward": true,
+    "git blame": true
   }
 }

@@ -48,6 +48,33 @@ func TestCheckCRDConsistencyPassesWhenNoDrift(t *testing.T) {
 	}
 }
 
+func TestCheckCRDConsistencyPassesWhenVersionNameFollowsPrinterColumns(t *testing.T) {
+	tempDir := t.TempDir()
+	sourceDir := filepath.Join(tempDir, "source")
+	generatedDir := filepath.Join(tempDir, "generated")
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatalf("mkdir source failed: %v", err)
+	}
+	if err := os.MkdirAll(generatedDir, 0o755); err != nil {
+		t.Fatalf("mkdir generated failed: %v", err)
+	}
+	content := []byte("apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata:\n  name: healingrequests.kubesentinel.io\nspec:\n  group: kubesentinel.io\n  versions:\n    - additionalPrinterColumns:\n        - jsonPath: .status.phase\n          name: Phase\n          type: string\n      name: v1alpha1\n")
+	if err := os.WriteFile(filepath.Join(sourceDir, "_healingrequests.yaml"), content, 0o644); err != nil {
+		t.Fatalf("write source file failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(generatedDir, "_healingrequests.yaml"), content, 0o644); err != nil {
+		t.Fatalf("write generated file failed: %v", err)
+	}
+
+	output, err := runCRDConsistencyScript(t, sourceDir, generatedDir)
+	if err != nil {
+		t.Fatalf("expected pass for version name after printer columns, got error: %v output: %s", err, output)
+	}
+	if !strings.Contains(output, "QUALITY_GATE_RESULT=allow") {
+		t.Fatalf("expected allow result, output: %s", output)
+	}
+}
+
 func TestCheckCRDConsistencyBlocksWhenDriftDetected(t *testing.T) {
 	tempDir := t.TempDir()
 	sourceDir := filepath.Join(tempDir, "source")

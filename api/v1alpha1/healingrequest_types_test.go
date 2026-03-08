@@ -308,17 +308,17 @@ func TestValidateStatusContractSemanticsBoundaries(t *testing.T) {
 		t.Fatalf("expected missing status semantics to fail")
 	}
 
-	r.Status = HealingRequestStatus{Phase: PhaseCompleted, LastAction: "noop", LastGateDecision: "outcome=allow reason_code=completed stage=completed", NextRecommendation: "continue-observation"}
+	r.Status = HealingRequestStatus{Phase: PhaseCompleted, CorrelationKey: "trace-completed", LastAction: "noop", LastGateDecision: "outcome=allow reason_code=completed stage=completed", NextRecommendation: "continue-observation"}
 	if err := r.ValidateAPIContractRequirements(); err != nil {
 		t.Fatalf("expected completed semantics to pass: %v", err)
 	}
 
-	r.Status = HealingRequestStatus{Phase: PhaseBlocked, LastAction: "manual-intervention", LastGateDecision: "outcome=block reason_code=gate_blocked stage=blocked", NextRecommendation: "check migration", BlockReasonCode: "gate_blocked"}
+	r.Status = HealingRequestStatus{Phase: PhaseBlocked, CorrelationKey: "trace-blocked", LastAction: "manual-intervention", LastGateDecision: "outcome=block reason_code=gate_blocked stage=blocked", NextRecommendation: "check migration", BlockReasonCode: "gate_blocked"}
 	if err := r.ValidateAPIContractRequirements(); err != nil {
 		t.Fatalf("expected blocked semantics with failure reason to pass: %v", err)
 	}
 
-	r.Status = HealingRequestStatus{Phase: PhaseL3, LastAction: "manual-intervention", LastGateDecision: "outcome=degrade reason_code=manual_intervention stage=l3", NextRecommendation: "manual review"}
+	r.Status = HealingRequestStatus{Phase: PhaseL3, CorrelationKey: "trace-l3", LastAction: "manual-intervention", LastGateDecision: "outcome=degrade reason_code=manual_intervention stage=l3", NextRecommendation: "manual review"}
 	if err := r.ValidateAPIContractRequirements(); err == nil {
 		t.Fatalf("expected degraded semantics without failure reason to fail")
 	}
