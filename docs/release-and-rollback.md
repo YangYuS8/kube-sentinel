@@ -8,6 +8,56 @@
 - 测试环境统一入口使用 [scripts/install-minimal.sh](scripts/install-minimal.sh) 与 [scripts/dev-local-loop.sh](scripts/dev-local-loop.sh)；它们面向联调与 minikube，不直接等同生产安装基线。
 - 首发灰度必须优先验证：Webhook 接入幂等、维护窗口阻断、速率限制、爆炸半径、熔断、写前快照失败阻断、Deployment L2 健康候选选择、L2 回滚失败后的快照恢复。
 - 首发回滚优先级：先关闭 Deployment L2 自动回滚，再保留 L1 或只读评估链路，最后根据最近快照与审计记录执行人工恢复。
+- 额外 UI 查询后端、独立读模型和 StatefulSet 自动写动作不属于首发阻断项，必须通过单独变更推进。
+
+## 首发发布执行顺序
+
+首个可交付版本固定采用以下顺序，禁止跳步：
+
+1. 预生产验证：复用 `install-minimal`、`dev-local-loop check`、`drill-runtime-closed-loop` 与 `make delivery-pipeline`。
+2. RC 发布：仅允许使用预发布标签（如 `v1.0.0-rc.1`），并要求 `release-image-plan` 输出 `channel=prerelease`、`publish_latest=false`。
+3. pilot/cutover：仅允许对已完成预生产验证的 RC 版本推进，观察记录必须声明当前范围仅覆盖 Deployment 自动闭环。
+4. 稳定版发布：仅在预生产、go-live 和 pilot/cutover 证据都已完成时允许使用稳定版标签；此时 `latest` 才能更新。
+
+建议统一执行入口：
+
+```bash
+bash ./scripts/v1-release-execution.sh
+```
+
+稳定版放行前必须显式提供：
+
+- `V1_RELEASE_RC_TAG`
+- `V1_RELEASE_PREPROD_VERIFIED=true`
+- `V1_RELEASE_PILOT_VERIFIED=true`
+- `V1_RELEASE_GO_LIVE_VERIFIED=true`
+
+缺任一项都视为首发发布顺序不完整。
+
+## 首发证据包与归档位置
+
+首发证据包至少包含以下内容：
+
+- go-live decision pack：建议归档到 [docs/evidence/v1-go-live-decision-pack.sample.json](docs/evidence/v1-go-live-decision-pack.sample.json) 对应位置
+- pilot/cutover decision pack：建议归档到 [docs/evidence/v1-pilot-cutover-decision-pack.sample.json](docs/evidence/v1-pilot-cutover-decision-pack.sample.json) 对应位置
+- 预生产演练输出：建议归档到 `.tmp/v1-release-execution/<stage>-<version>/04-delivery-pipeline.log`
+- 版本标签记录：建议归档到 `.tmp/v1-release-execution/<stage>-<version>/release-plan.env`
+- 回滚说明：必须引用本文件中的回滚步骤与首发范围说明
+
+如果使用统一入口 `scripts/v1-release-execution.sh`，默认归档目录为：
+
+```text
+.tmp/v1-release-execution/<stage>-<version>/
+```
+
+其中至少包含：
+
+- `release.trace`
+- `release-summary.env`
+- `release-plan.env`
+- `04-delivery-pipeline.log`
+
+首发证据缺失时，不得将该版本宣称为第一个可交付版本。
 
 ## 灰度启用策略
 
@@ -123,6 +173,7 @@
 - `drillRollback` 失败：先补演练直到达标，再进入 go-live。
 - `approvalFreeze` 失败：补齐审批等级或等待冻结窗口结束。
 - `auditIntegrity` 失败：补齐人工覆盖审计字段（`actor/reason/timestamp/traceKey`）并确保幂等。
+- 首发顺序失败：回到 RC 阶段，重新执行预生产验证与证据归档；禁止直接复用未留痕的手工结论进入稳定版。
 
 ## 预生产 dry-run 语义约束（最小）
 

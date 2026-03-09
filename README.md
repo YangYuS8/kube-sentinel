@@ -30,6 +30,7 @@ Kube-Sentinel 是一个基于事件驱动的 Kubernetes 故障自愈控制器。
 - `StatefulSet` 自动写动作
 - 复杂发布门禁自动化
 - 完整生产级多集群放量编排
+- 额外的自定义 UI 查询后端或独立控制台读模型
 
 ## 核心链路
 
@@ -144,6 +145,37 @@ bash ./scripts/install-minimal.sh
 - `ghcr.io/yangyus8/kube-sentinel:latest`：始终指向最近一次稳定版发布，不承载预发布结果。
 - `ghcr.io/yangyus8/kube-sentinel:vX.Y.Z-rc.N` / `-beta.N`：预发布镜像，仅用于联调和发布前验证。
 - `kube-sentinel/controller:latest`：本地构建默认镜像，仅用于当前工作区快速迭代，不应作为共享环境基线。
+
+### 2.5 首发发布执行路径
+
+首个可交付版本遵循固定顺序：预生产验证 -> RC 发布 -> pilot/cutover -> 稳定版发布。
+
+- 首发阻断范围只覆盖 Deployment 自动闭环；StatefulSet 自动写动作与额外 UI 查询层不属于首发放行前置条件。
+- 统一预演入口：`bash ./scripts/v1-release-execution.sh`
+- 首发检查表：见 [docs/v1-release-checklist.md](docs/v1-release-checklist.md)
+- 发布与回滚说明：见 [docs/release-and-rollback.md](docs/release-and-rollback.md)
+
+RC 预演示例：
+
+```bash
+V1_RELEASE_STAGE=rc \
+V1_RELEASE_VERSION_TAG=v1.0.0-rc.1 \
+bash ./scripts/v1-release-execution.sh
+```
+
+稳定版放行示例：
+
+```bash
+V1_RELEASE_STAGE=stable \
+V1_RELEASE_VERSION_TAG=v1.0.0 \
+V1_RELEASE_RC_TAG=v1.0.0-rc.1 \
+V1_RELEASE_PREPROD_VERIFIED=true \
+V1_RELEASE_PILOT_VERIFIED=true \
+V1_RELEASE_GO_LIVE_VERIFIED=true \
+bash ./scripts/v1-release-execution.sh
+```
+
+预演和放行记录默认归档到 `.tmp/v1-release-execution/<stage>-<version>/`，至少包含发布 trace、delivery pipeline 输出和 release plan 摘要。
 
 ### 3. 准备本地集群上下文
 
