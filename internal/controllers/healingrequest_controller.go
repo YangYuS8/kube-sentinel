@@ -36,6 +36,7 @@ func (r *HealingRequestReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			AuditSink:        &observability.MemoryAuditSink{},
 			EventSink:        &observability.MemoryEventSink{},
 			K8sEventRecorder: r.Recorder,
+			Mode:             healing.RuntimeModeMinimal,
 		}
 	}
 	result, err := r.Orchestrator.Process(ctx, &resource)

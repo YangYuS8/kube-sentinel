@@ -321,6 +321,10 @@ spec:
                 type: array
               correlationKey:
                 type: string
+              handoffNote:
+                type: string
+              incidentSummary:
+                type: string
               deploymentL2Candidate:
                 type: string
               deploymentL2Decision:
@@ -359,6 +363,8 @@ spec:
               pendingSince:
                 type: string
               phase:
+                type: string
+              recommendationType:
                 type: string
               shadowAction:
                 type: string

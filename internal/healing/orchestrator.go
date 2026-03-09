@@ -26,6 +26,8 @@ type Orchestrator struct {
 	RuntimeInputProvider RuntimeInputProvider
 	K8sEventRecorder     record.EventRecorder
 	Now                  func() time.Time
+	Mode                 RuntimeMode
+	ReadOnly             bool
 
 	mu              sync.Mutex
 	breakersByScope map[string]*safety.CircuitBreaker
@@ -35,6 +37,13 @@ type Orchestrator struct {
 type ProcessResult struct {
 	RequeueAfter time.Duration
 }
+
+type RuntimeMode string
+
+const (
+	RuntimeModeLegacy  RuntimeMode = ""
+	RuntimeModeMinimal RuntimeMode = "minimal"
+)
 
 func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingRequest) (ProcessResult, error) {
 	if o.Now == nil {
@@ -131,6 +140,9 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 		return result, err
 	}
 	runtimeInput.ActionsInWindow = o.actionsInWindow(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now(), req.Spec.RateLimit.WindowMinutes)
+	if o.runtimeMode() == RuntimeModeMinimal {
+		return o.processMinimalRuntime(ctx, req, breaker, runtimeInput)
+	}
 	if hasAlertMetadata(req) && isResolvedAlert(req) {
 		req.Status.Phase = ksv1alpha1.PhaseSuppressed
 		req.Status.SuppressedAt = o.Now().Format(time.RFC3339)
@@ -438,6 +450,175 @@ func (o *Orchestrator) Process(ctx context.Context, req *ksv1alpha1.HealingReque
 	return result, nil
 }
 
+func (o *Orchestrator) runtimeMode() RuntimeMode {
+	if strings.EqualFold(strings.TrimSpace(string(o.Mode)), string(RuntimeModeMinimal)) {
+		return RuntimeModeMinimal
+	}
+	return RuntimeModeLegacy
+}
+
+func (o *Orchestrator) processMinimalRuntime(ctx context.Context, req *ksv1alpha1.HealingRequest, breaker *safety.CircuitBreaker, runtimeInput RuntimeInput) (ProcessResult, error) {
+	result := ProcessResult{}
+	o.resetNonCoreStatus(req)
+	if req.Spec.Workload.Kind != "Deployment" {
+		if o.Metrics != nil {
+			o.Metrics.IncFailures()
+			o.Metrics.IncReadOnlyBlocks("out_of_scope", req.Spec.Workload.Kind)
+		}
+		req.Status.Phase = ksv1alpha1.PhaseBlocked
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastError = "workload kind is outside the minimal V1 runtime scope"
+		req.Status.BlockReasonCode = "out_of_scope_workload"
+		req.Status.LastGateDecision = "outcome=block reason_code=out_of_scope_workload stage=scope"
+		req.Status.LastEventReason = "out-of-scope-workload"
+		req.Status.NextRecommendation = "use Agent or kubectl for manual investigation; automatic write actions are limited to Deployment L1"
+		o.emitRuntimeEvent(req, "Warning", "OutOfScopeWorkload", req.Status.LastError)
+		o.writeAudit(req, "blocked", req.Status.LastError)
+		return result, errors.New(req.Status.LastError)
+	}
+
+	decision := safety.Evaluate(safety.GateInput{
+		Now:                o.Now(),
+		MaintenanceWindows: req.Spec.MaintenanceWindows,
+		ActionsInWindow:    runtimeInput.ActionsInWindow,
+		MaxActions:         req.Spec.RateLimit.MaxActions,
+		AffectedPods:       runtimeInput.AffectedPods,
+		ClusterPods:        runtimeInput.ClusterPods,
+		MaxPodPercentage:   req.Spec.BlastRadius.MaxPodPercentage,
+	})
+	if !decision.Allow {
+		if o.Metrics != nil {
+			o.Metrics.IncFailures()
+			o.Metrics.IncReadOnlyBlocks("gate", req.Spec.Workload.Kind)
+			if decision.Reason == "maintenance window" {
+				o.Metrics.IncMaintenanceWindowConflicts()
+			}
+		}
+		req.Status.Phase = ksv1alpha1.PhaseBlocked
+		req.Status.LastError = decision.Reason
+		req.Status.BlockReasonCode = "gate_blocked"
+		req.Status.ShadowAction = blockedWriteShadowAction(req, "blocked by gate")
+		req.Status.LastGateDecision = fmt.Sprintf("%s (actions=%d,max=%d,affectedPods=%d,clusterPods=%d,maxPodPct=%d)", decision.Reason, runtimeInput.ActionsInWindow, req.Spec.RateLimit.MaxActions, runtimeInput.AffectedPods, runtimeInput.ClusterPods, req.Spec.BlastRadius.MaxPodPercentage)
+		req.Status.LastEventReason = "gate-blocked"
+		req.Status.NextRecommendation = "inspect gate evidence and retry later or continue with manual intervention"
+		o.emitRuntimeEvent(req, "Warning", "GateBlocked", req.Status.LastGateDecision)
+		o.writeAudit(req, "blocked", req.Status.LastGateDecision)
+		return result, errors.New(decision.Reason)
+	}
+
+	if o.actionsInWindow(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name+"/l1", o.Now(), req.Spec.IdempotencyWindowMinutes) > 0 {
+		req.Status.Phase = ksv1alpha1.PhaseBlocked
+		req.Status.LastError = "deployment l1 action already executed in current idempotency window"
+		req.Status.BlockReasonCode = "deployment_l1_idempotency_window"
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastEventReason = "deployment-l1-idempotency-blocked"
+		req.Status.NextRecommendation = "wait for the idempotency window to expire or investigate manually"
+		if o.Metrics != nil {
+			o.Metrics.IncFailures()
+			o.Metrics.IncReadOnlyBlocks("deployment_l1_idempotency_window", req.Spec.Workload.Kind)
+			o.Metrics.IncDeploymentL1Result("blocked")
+			o.Metrics.IncDeploymentStageBlock("idempotency_window")
+		}
+		o.emitRuntimeEvent(req, "Warning", "DeploymentL1IdempotencyBlocked", req.Status.LastError)
+		o.writeAudit(req, "blocked", req.Status.LastError)
+		return result, errors.New(req.Status.LastError)
+	}
+
+	if o.ReadOnly {
+		req.Status.Phase = ksv1alpha1.PhaseBlocked
+		req.Status.LastError = "deployment l1 automatic actions are disabled in read-only mode"
+		req.Status.BlockReasonCode = "read_only_mode"
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastEventReason = "read-only-mode"
+		req.Status.ShadowAction = blockedWriteShadowAction(req, "blocked by read-only mode")
+		req.Status.LastGateDecision = "outcome=block reason_code=read_only_mode stage=pre-l1"
+		req.Status.NextRecommendation = "review the incident with Agent or kubectl; enable deployment L1 only when you are ready to allow automatic actions"
+		if o.Metrics != nil {
+			o.Metrics.IncFailures()
+			o.Metrics.IncReadOnlyBlocks("read_only_mode", req.Spec.Workload.Kind)
+			o.Metrics.IncDeploymentStageBlock("read_only_mode")
+		}
+		o.emitRuntimeEvent(req, "Warning", "ReadOnlyMode", req.Status.LastError)
+		o.writeAudit(req, "blocked", req.Status.LastError)
+		return result, errors.New(req.Status.LastError)
+	}
+
+	snap, err := o.createSnapshot(ctx, req, "deployment-l1")
+	if err != nil {
+		if o.Metrics != nil {
+			o.Metrics.IncFailures()
+			o.Metrics.IncSnapshotCreateFailure()
+			o.Metrics.IncDeploymentL1Result("failed")
+			o.Metrics.IncReadOnlyBlocks("snapshot_failed", req.Spec.Workload.Kind)
+			o.Metrics.IncDeploymentStageBlock("snapshot_failed")
+		}
+		req.Status.Phase = ksv1alpha1.PhaseBlocked
+		req.Status.LastError = err.Error()
+		req.Status.BlockReasonCode = "snapshot_failed"
+		req.Status.SnapshotFailureReason = err.Error()
+		req.Status.LastAction = "manual-intervention"
+		req.Status.LastGateDecision = "outcome=block reason_code=snapshot_failed stage=pre-l1"
+		req.Status.LastEventReason = "snapshot-failed"
+		req.Status.NextRecommendation = "fix snapshot creation or continue with manual intervention"
+		o.emitRuntimeEvent(req, "Warning", "SnapshotCreateFailed", err.Error())
+		o.writeAudit(req, "blocked", err.Error())
+		return result, err
+	}
+
+	req.Status.Phase = ksv1alpha1.PhaseL1
+	req.Status.LastAction = "deployment-l1-rollout-restart"
+	req.Status.LastGateDecision = "outcome=allow reason_code=deployment_l1_started stage=l1"
+	req.Status.LastEventReason = "deployment-l1-started"
+	if err := o.Adapter.ExecuteDeploymentControlledAction(ctx, req.Spec.Workload.Namespace, req.Spec.Workload.Name, "rollout-restart"); err != nil {
+		req.Status.Phase = ksv1alpha1.PhaseBlocked
+		req.Status.LastError = fmt.Sprintf("deployment l1 action failed: %v", err)
+		req.Status.BlockReasonCode = "deployment_l1_failed"
+		req.Status.LastGateDecision = "outcome=block reason_code=deployment_l1_failed stage=l1"
+		req.Status.LastEventReason = "deployment-l1-failed"
+		req.Status.LastEvidenceStatus = "deployment-l1-failed"
+		req.Status.NextRecommendation = "inspect rollout status, pod logs and recent changes before deciding whether to retry manually"
+		if o.Metrics != nil {
+			o.Metrics.IncFailures()
+			o.Metrics.IncDeploymentL1Result("failed")
+			o.Metrics.IncDeploymentStageBlock("l1_failed")
+		}
+		if breaker != nil {
+			breaker.RecordFailure(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now())
+			if allow, _ := breaker.Allow(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now()); !allow {
+				state := breaker.Status(req.Spec.Workload.Namespace + "/" + req.Spec.Workload.Name)
+				req.Status.CircuitBreaker.ObjectOpen = state.OpenReason == "object breaker open"
+				req.Status.CircuitBreaker.DomainOpen = state.OpenReason == "domain breaker open"
+				req.Status.CircuitBreaker.CurrentObjectFailures = state.CurrentObjectFailures
+				req.Status.CircuitBreaker.CurrentDomainFailures = state.CurrentDomainFailures
+				req.Status.CircuitBreaker.RecoveryAt = state.RecoveryAt
+				req.Status.CircuitBreaker.OpenReason = fmt.Sprintf("%s (objectThreshold=%d, domainThreshold=%d)", state.OpenReason, req.Spec.CircuitBreaker.ObjectFailureThreshold, req.Spec.CircuitBreaker.DomainFailureThreshold)
+			}
+		}
+		o.emitRuntimeEvent(req, "Warning", "DeploymentL1Failed", err.Error())
+		o.writeAudit(req, "blocked", req.Status.LastError)
+		_ = snap
+		return result, err
+	}
+
+	o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name+"/l1", o.Now(), req.Spec.IdempotencyWindowMinutes)
+	o.recordActionAttempt(req.Spec.Workload.Namespace+"/"+req.Spec.Workload.Name, o.Now(), req.Spec.RateLimit.WindowMinutes)
+	req.Status.Phase = ksv1alpha1.PhaseCompleted
+	req.Status.LastAction = "deployment-l1-rollout-restart"
+	req.Status.LastEventReason = "deployment-l1-succeeded"
+	req.Status.LastGateDecision = "outcome=allow reason_code=deployment_l1_succeeded stage=l1"
+	req.Status.LastEvidenceStatus = "deployment-l1-succeeded"
+	req.Status.LastError = ""
+	req.Status.NextRecommendation = "continue observing post-l1 stability"
+	req.Status.ObservedGeneration = req.Generation
+	if o.Metrics != nil {
+		o.Metrics.IncSuccess()
+		o.Metrics.IncDeploymentL1Result("success")
+	}
+	o.writeAudit(req, "success", "deployment l1 action executed")
+	o.emitRuntimeEvent(req, "Normal", "DeploymentL1Succeeded", "deployment l1 rollout restart executed")
+	return result, nil
+}
+
 func (o *Orchestrator) advanceSoakWindow(req *ksv1alpha1.HealingRequest, duration time.Duration, minSamples int) (bool, bool, time.Duration) {
 	now := o.Now()
 	if minSamples < 1 {
@@ -704,6 +885,9 @@ func (o *Orchestrator) ensureStatusSemantics(req *ksv1alpha1.HealingRequest) {
 			req.Status.NextRecommendation = "continue monitoring current l1 execution"
 		}
 	}
+	req.Status.RecommendationType = recommendationTypeFor(req.Status)
+	req.Status.IncidentSummary = buildIncidentSummary(req)
+	req.Status.HandoffNote = buildHandoffNote(req)
 	if req.Status.LastGateDecision == "" {
 		reasonCode := gateReasonCodeFromStatus(req.Status)
 		switch req.Status.Phase {
@@ -817,6 +1001,102 @@ func defaultL1ActionFor(req *ksv1alpha1.HealingRequest) string {
 		return "statefulset-controlled-restart"
 	}
 	return "deployment-l1-rollout-restart"
+}
+
+func (o *Orchestrator) resetNonCoreStatus(req *ksv1alpha1.HealingRequest) {
+	req.Status.StatefulSetAuthorization = ""
+	req.Status.StatefulSetFreezeState = ""
+	req.Status.StatefulSetFreezeUntil = ""
+	req.Status.StatefulSetFailureReason = ""
+	req.Status.StatefulSetL2Candidate = ""
+	req.Status.StatefulSetL2Decision = ""
+	req.Status.StatefulSetL2Result = ""
+	req.Status.DeploymentL2Candidate = ""
+	req.Status.DeploymentL2Decision = ""
+	req.Status.DeploymentL2Result = ""
+	req.Status.NamespaceBlockRate = 0
+	req.Status.EmergencyAttempts = 0
+	req.Status.LastHealthyRevision = ""
+	req.Status.PendingSince = ""
+	req.Status.SuppressedAt = ""
+	req.Status.StableSampleCount = 0
+}
+
+func recommendationTypeFor(status ksv1alpha1.HealingRequestStatus) string {
+	switch status.Phase {
+	case ksv1alpha1.PhaseCompleted, ksv1alpha1.PhaseSuppressed, ksv1alpha1.PhasePendingVerify:
+		return "observe"
+	case ksv1alpha1.PhaseL1:
+		return "monitor"
+	case ksv1alpha1.PhaseBlocked, ksv1alpha1.PhaseL3:
+		if status.BlockReasonCode == "read_only_mode" || status.BlockReasonCode == "out_of_scope_workload" {
+			return "manual-action"
+		}
+		return "investigate"
+	default:
+		return "investigate"
+	}
+}
+
+func buildIncidentSummary(req *ksv1alpha1.HealingRequest) string {
+	if req == nil {
+		return ""
+	}
+	parts := []string{}
+	if req.Spec.Workload.Namespace != "" && req.Spec.Workload.Name != "" {
+		parts = append(parts, fmt.Sprintf("workload=%s/%s", req.Spec.Workload.Namespace, req.Spec.Workload.Name))
+	}
+	if req.Spec.Workload.Kind != "" {
+		parts = append(parts, fmt.Sprintf("kind=%s", req.Spec.Workload.Kind))
+	}
+	if req.Status.Phase != "" {
+		parts = append(parts, fmt.Sprintf("phase=%s", req.Status.Phase))
+	}
+	if req.Status.LastAction != "" {
+		parts = append(parts, fmt.Sprintf("action=%s", req.Status.LastAction))
+	}
+	if req.Status.BlockReasonCode != "" {
+		parts = append(parts, fmt.Sprintf("reason=%s", req.Status.BlockReasonCode))
+	} else if req.Status.LastError != "" {
+		parts = append(parts, fmt.Sprintf("reason=%s", req.Status.LastError))
+	}
+	if req.Status.CorrelationKey != "" {
+		parts = append(parts, fmt.Sprintf("correlation=%s", req.Status.CorrelationKey))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func buildHandoffNote(req *ksv1alpha1.HealingRequest) string {
+	if req == nil {
+		return ""
+	}
+	timestamp := "unknown-time"
+	if !req.CreationTimestamp.IsZero() {
+		timestamp = req.CreationTimestamp.UTC().Format(time.RFC3339)
+	}
+	reason := req.Status.BlockReasonCode
+	if reason == "" {
+		reason = req.Status.LastError
+	}
+	parts := []string{
+		fmt.Sprintf("%s incident for %s/%s (%s)", timestamp, req.Spec.Workload.Namespace, req.Spec.Workload.Name, req.Spec.Workload.Kind),
+	}
+	if req.Status.LastAction != "" {
+		parts = append(parts, fmt.Sprintf("last action: %s", req.Status.LastAction))
+	}
+	if req.Status.Phase != "" {
+		parts = append(parts, fmt.Sprintf("phase: %s", req.Status.Phase))
+	}
+	if reason != "" {
+		parts = append(parts, fmt.Sprintf("reason: %s", reason))
+	}
+	if req.Status.NextRecommendation != "" {
+		parts = append(parts, fmt.Sprintf("next step: %s", req.Status.NextRecommendation))
+	}
+	if req.Status.CorrelationKey != "" {
+		parts = append(parts, fmt.Sprintf("correlation: %s", req.Status.CorrelationKey))
+	}
+	return strings.Join(parts, "; ")
 }
 
 func blockedWriteShadowAction(req *ksv1alpha1.HealingRequest, reason string) string {

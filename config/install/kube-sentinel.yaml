@@ -73,6 +73,10 @@ spec:
               value: :8090
             - name: KUBE_SENTINEL_WEBHOOK_PATH
               value: /alertmanager/webhook
+            - name: KUBE_SENTINEL_RUNTIME_MODE
+              value: __KUBE_SENTINEL_RUNTIME_MODE__
+            - name: KUBE_SENTINEL_READ_ONLY_MODE
+              value: __KUBE_SENTINEL_READ_ONLY_MODE__
           ports:
             - name: metrics
               containerPort: 8080

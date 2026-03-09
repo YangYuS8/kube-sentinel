@@ -196,6 +196,68 @@ func TestOrchestratorDeploymentL1FailureAttemptsRollbackToHealthyCandidate(t *te
 	}
 }
 
+func TestOrchestratorMinimalModeBlocksStatefulSetWrites(t *testing.T) {
+	req := newReq()
+	req.Spec.Workload.Kind = "StatefulSet"
+	o := &Orchestrator{
+		Adapter:     fakeAdapter{supports: true},
+		Snapshotter: &MemorySnapshotter{},
+		Mode:        RuntimeModeMinimal,
+	}
+	if _, err := o.Process(context.Background(), req); err == nil {
+		t.Fatalf("expected statefulset to be blocked in minimal mode")
+	}
+	if req.Status.BlockReasonCode != "out_of_scope_workload" {
+		t.Fatalf("expected out_of_scope_workload, got %s", req.Status.BlockReasonCode)
+	}
+	if req.Status.RecommendationType != "manual-action" {
+		t.Fatalf("expected manual-action recommendation type, got %s", req.Status.RecommendationType)
+	}
+	if req.Status.IncidentSummary == "" || req.Status.HandoffNote == "" {
+		t.Fatalf("expected agent-facing summary and handoff note")
+	}
+}
+
+func TestOrchestratorMinimalModeReadOnlyBlocksDeploymentL1(t *testing.T) {
+	req := newReq()
+	o := &Orchestrator{
+		Adapter:     fakeAdapter{supports: true},
+		Snapshotter: &MemorySnapshotter{},
+		Mode:        RuntimeModeMinimal,
+		ReadOnly:    true,
+	}
+	if _, err := o.Process(context.Background(), req); err == nil {
+		t.Fatalf("expected read-only mode to block deployment writes")
+	}
+	if req.Status.BlockReasonCode != "read_only_mode" {
+		t.Fatalf("expected read_only_mode, got %s", req.Status.BlockReasonCode)
+	}
+	if req.Status.RecommendationType != "manual-action" {
+		t.Fatalf("expected manual-action recommendation type, got %s", req.Status.RecommendationType)
+	}
+}
+
+func TestOrchestratorMinimalModeDeploymentL1FailureStopsWithoutL2(t *testing.T) {
+	req := newReq()
+	o := &Orchestrator{
+		Adapter:     fakeAdapter{supports: true, deploymentActionErr: errors.New("l1 failed")},
+		Snapshotter: &MemorySnapshotter{},
+		Mode:        RuntimeModeMinimal,
+	}
+	if _, err := o.Process(context.Background(), req); err == nil {
+		t.Fatalf("expected l1 failure in minimal mode")
+	}
+	if req.Status.BlockReasonCode != "deployment_l1_failed" {
+		t.Fatalf("expected deployment_l1_failed, got %s", req.Status.BlockReasonCode)
+	}
+	if req.Status.Phase != ksv1alpha1.PhaseBlocked {
+		t.Fatalf("expected blocked phase, got %s", req.Status.Phase)
+	}
+	if req.Status.DeploymentL2Decision != "" || req.Status.DeploymentL2Result != "" {
+		t.Fatalf("expected deployment l2 fields to remain empty in minimal mode")
+	}
+}
+
 func TestOrchestratorCorrelationAndEvent(t *testing.T) {
 	req := newReq()
 	req.Annotations = map[string]string{"kube-sentinel.io/correlation-key": "trace-1"}

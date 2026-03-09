@@ -7,6 +7,8 @@ IMAGE="${KUBE_SENTINEL_IMAGE:-kube-sentinel/controller:latest}"
 BUILD_IMAGE="${KUBE_SENTINEL_BUILD_IMAGE:-true}"
 IMAGE_BUILDER="${KUBE_SENTINEL_IMAGE_BUILDER:-}"
 DRY_RUN="${KUBE_SENTINEL_INSTALL_DRY_RUN:-false}"
+RUNTIME_MODE="${KUBE_SENTINEL_RUNTIME_MODE:-minimal}"
+READ_ONLY_MODE="${KUBE_SENTINEL_READ_ONLY_MODE:-false}"
 MANIFEST_TEMPLATE="${ROOT_DIR}/config/install/kube-sentinel.yaml"
 CRD_FILE="${ROOT_DIR}/config/crd/_healingrequests.yaml"
 
@@ -77,6 +79,8 @@ render_manifest() {
   sed \
     -e "s|__KUBE_SENTINEL_NAMESPACE__|${NAMESPACE}|g" \
     -e "s|__KUBE_SENTINEL_IMAGE__|${IMAGE}|g" \
+    -e "s|__KUBE_SENTINEL_RUNTIME_MODE__|${RUNTIME_MODE}|g" \
+    -e "s|__KUBE_SENTINEL_READ_ONLY_MODE__|${READ_ONLY_MODE}|g" \
     "$MANIFEST_TEMPLATE"
 }
 
@@ -168,6 +172,7 @@ main() {
   echo "  1. kubectl -n ${NAMESPACE} rollout status deployment/kube-sentinel"
   echo "  2. 在另一个终端运行 bash ./scripts/dev-local-loop.sh connect-cluster"
   echo "  3. 执行 bash ./scripts/drill-runtime-closed-loop.sh default"
+  echo "  4. 只读模式示例: KUBE_SENTINEL_READ_ONLY_MODE=true bash ./scripts/install-minimal.sh"
   if ! bool_is_true "$BUILD_IMAGE"; then
     echo "  NOTE: 你跳过了镜像构建；若 Pod ImagePullBackOff，请先执行 docker/podman build，并在 minikube 中执行 minikube image load ${IMAGE}"
   fi

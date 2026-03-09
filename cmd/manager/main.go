@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -17,6 +18,7 @@ import (
 
 	ksv1alpha1 "github.com/yangyus8/kube-sentinel/api/v1alpha1"
 	"github.com/yangyus8/kube-sentinel/internal/controllers"
+	"github.com/yangyus8/kube-sentinel/internal/healing"
 	"github.com/yangyus8/kube-sentinel/internal/ingestion"
 	"github.com/yangyus8/kube-sentinel/internal/observability"
 )
@@ -40,9 +42,11 @@ func run() error {
 	setupLog := ctrl.Log.WithName("setup")
 	webhookAddr := envOrDefault("KUBE_SENTINEL_WEBHOOK_BIND_ADDRESS", ":8090")
 	webhookPath := envOrDefault("KUBE_SENTINEL_WEBHOOK_PATH", "/alertmanager/webhook")
+	runtimeMode := parseRuntimeMode(envOrDefault("KUBE_SENTINEL_RUNTIME_MODE", string(healing.RuntimeModeMinimal)))
+	readOnlyMode := envBoolOrDefault("KUBE_SENTINEL_READ_ONLY_MODE", false)
 	observability.RegisterPrometheusMetrics()
 
-	setupLog.Info("starting kube-sentinel manager", "metricsAddr", metricsAddr, "probeAddr", probeAddr, "webhookAddr", webhookAddr, "webhookPath", webhookPath)
+	setupLog.Info("starting kube-sentinel manager", "metricsAddr", metricsAddr, "probeAddr", probeAddr, "webhookAddr", webhookAddr, "webhookPath", webhookPath, "runtimeMode", runtimeMode, "readOnlyMode", readOnlyMode)
 
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -64,9 +68,20 @@ func run() error {
 		return fmt.Errorf("create controller manager: %w", err)
 	}
 
+	orchestrator := &healing.Orchestrator{
+		Adapter:     healing.NewDeploymentAdapter(mgr.GetClient()),
+		Snapshotter: healing.NewKubernetesSnapshotter(mgr.GetClient()),
+		Metrics:     &observability.Metrics{},
+		AuditSink:   &observability.MemoryAuditSink{},
+		EventSink:   &observability.MemoryEventSink{},
+		Mode:        runtimeMode,
+		ReadOnly:    readOnlyMode,
+	}
+
 	if err := (&controllers.HealingRequestReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		Orchestrator: orchestrator,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup HealingRequest controller: %w", err)
 	}
@@ -107,4 +122,19 @@ func envOrDefault(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func envBoolOrDefault(key string, fallback bool) bool {
+	value := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if value == "" {
+		return fallback
+	}
+	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+func parseRuntimeMode(value string) healing.RuntimeMode {
+	if strings.EqualFold(strings.TrimSpace(value), string(healing.RuntimeModeMinimal)) {
+		return healing.RuntimeModeMinimal
+	}
+	return healing.RuntimeModeLegacy
 }

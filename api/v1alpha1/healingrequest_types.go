@@ -160,6 +160,9 @@ type CircuitBreakerStatus struct {
 type HealingRequestStatus struct {
 	Phase                    HealingPhase         `json:"phase,omitempty"`
 	WorkloadCapability       string               `json:"workloadCapability,omitempty"`
+	IncidentSummary          string               `json:"incidentSummary,omitempty"`
+	RecommendationType       string               `json:"recommendationType,omitempty"`
+	HandoffNote              string               `json:"handoffNote,omitempty"`
 	StatefulSetAuthorization string               `json:"statefulSetAuthorization,omitempty"`
 	StatefulSetFreezeState   string               `json:"statefulSetFreezeState,omitempty"`
 	StatefulSetFreezeUntil   string               `json:"statefulSetFreezeUntil,omitempty"`
@@ -507,6 +510,15 @@ func (status HealingRequestStatus) ValidateContractSemantics() error {
 	}
 	if status.NextRecommendation == "" {
 		return fmt.Errorf("status.nextRecommendation is required for api contract semantics")
+	}
+	if status.RecommendationType == "" {
+		return fmt.Errorf("status.recommendationType is required for api contract semantics")
+	}
+	if status.IncidentSummary == "" {
+		return fmt.Errorf("status.incidentSummary is required for api contract semantics")
+	}
+	if status.HandoffNote == "" {
+		return fmt.Errorf("status.handoffNote is required for api contract semantics")
 	}
 	if status.Phase == PhaseBlocked || status.Phase == PhaseL3 {
 		if status.BlockReasonCode == "" && status.LastError == "" {

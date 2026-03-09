@@ -266,9 +266,12 @@ func TestValidateAPIContractRequirementsRequireCorrelationKey(t *testing.T) {
 	r.Status = HealingRequestStatus{
 		Phase:              PhaseCompleted,
 		CorrelationKey:     "",
+		IncidentSummary:    "workload=default/app; phase=Completed",
 		LastAction:         "restart-workload",
 		LastGateDecision:   "outcome=allow reason_code=completed stage=completed",
 		NextRecommendation: "continue observing post-action stability",
+		RecommendationType: "observe",
+		HandoffNote:        "incident completed; continue observation",
 	}
 	if err := r.ValidateAPIContractRequirements(); err == nil {
 		t.Fatalf("expected missing correlationKey to fail api contract validation")
@@ -286,9 +289,12 @@ func TestValidateAPIContractRequirementsBlockedRequiresReason(t *testing.T) {
 	r.Status = HealingRequestStatus{
 		Phase:              PhaseBlocked,
 		CorrelationKey:     "trace-2",
+		IncidentSummary:    "workload=default/app; phase=Blocked",
 		LastAction:         "manual-intervention",
 		LastGateDecision:   "outcome=block reason_code=blocked stage=blocked",
 		NextRecommendation: "manual intervention required",
+		RecommendationType: "investigate",
+		HandoffNote:        "incident blocked; manual intervention required",
 	}
 	if err := r.ValidateAPIContractRequirements(); err == nil {
 		t.Fatalf("expected blocked status without reason to fail api contract validation")
@@ -308,17 +314,17 @@ func TestValidateStatusContractSemanticsBoundaries(t *testing.T) {
 		t.Fatalf("expected missing status semantics to fail")
 	}
 
-	r.Status = HealingRequestStatus{Phase: PhaseCompleted, CorrelationKey: "trace-completed", LastAction: "noop", LastGateDecision: "outcome=allow reason_code=completed stage=completed", NextRecommendation: "continue-observation"}
+	r.Status = HealingRequestStatus{Phase: PhaseCompleted, CorrelationKey: "trace-completed", IncidentSummary: "workload=default/app; phase=Completed", LastAction: "noop", LastGateDecision: "outcome=allow reason_code=completed stage=completed", NextRecommendation: "continue-observation", RecommendationType: "observe", HandoffNote: "incident completed; continue observation"}
 	if err := r.ValidateAPIContractRequirements(); err != nil {
 		t.Fatalf("expected completed semantics to pass: %v", err)
 	}
 
-	r.Status = HealingRequestStatus{Phase: PhaseBlocked, CorrelationKey: "trace-blocked", LastAction: "manual-intervention", LastGateDecision: "outcome=block reason_code=gate_blocked stage=blocked", NextRecommendation: "check migration", BlockReasonCode: "gate_blocked"}
+	r.Status = HealingRequestStatus{Phase: PhaseBlocked, CorrelationKey: "trace-blocked", IncidentSummary: "workload=default/app; phase=Blocked", LastAction: "manual-intervention", LastGateDecision: "outcome=block reason_code=gate_blocked stage=blocked", NextRecommendation: "check migration", RecommendationType: "investigate", HandoffNote: "incident blocked; manual review needed", BlockReasonCode: "gate_blocked"}
 	if err := r.ValidateAPIContractRequirements(); err != nil {
 		t.Fatalf("expected blocked semantics with failure reason to pass: %v", err)
 	}
 
-	r.Status = HealingRequestStatus{Phase: PhaseL3, CorrelationKey: "trace-l3", LastAction: "manual-intervention", LastGateDecision: "outcome=degrade reason_code=manual_intervention stage=l3", NextRecommendation: "manual review"}
+	r.Status = HealingRequestStatus{Phase: PhaseL3, CorrelationKey: "trace-l3", IncidentSummary: "workload=default/app; phase=L3", LastAction: "manual-intervention", LastGateDecision: "outcome=degrade reason_code=manual_intervention stage=l3", NextRecommendation: "manual review", RecommendationType: "manual-action", HandoffNote: "incident degraded; hand off to operator"}
 	if err := r.ValidateAPIContractRequirements(); err == nil {
 		t.Fatalf("expected degraded semantics without failure reason to fail")
 	}

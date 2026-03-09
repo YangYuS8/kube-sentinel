@@ -1,36 +1,38 @@
 # Kube-Sentinel
 
-Kube-Sentinel 是一个基于事件驱动的 Kubernetes 故障自愈控制器。
+Kube-Sentinel 是一个面向 Kubernetes 夜间值班场景的轻量哨兵工具。
 
 当前首发版本聚焦在一个明确收敛的能力边界上：
 
 - 通过 Alertmanager Webhook 接收故障事件
 - 将事件映射为 `HealingRequest`
-- 对 Deployment 执行安全优先的分层处置：L1 最小影响动作，L2 健康版本回滚，L3 人工介入建议
+- 对 Deployment 执行一次安全优先的 L1 最小动作尝试
 - 在任何自动写操作前执行门禁判定与快照校验
-- 输出结构化审计记录、运行时事件和指标
+- 输出结构化审计记录、运行时事件和指标，并为 Agent/Headlamp/Grafana/kubectl 提供稳定关联键
 
-它不是完整可观测平台，也不是全自动发布系统。当前版本的目标，是交付第一个可持续发布、可验证、可回滚的自动处置闭环。
+它不是完整可观测平台，也不是自治运维平台。当前版本的目标，是交付一个可快速部署、可解释、可人工接管的夜间值班哨兵。
 
 ## 当前支持范围
 
 首发版本已经完成的能力：
 
-- `Deployment` 自动处置闭环
-- `Deployment` L1 失败后的 L2 健康版本回滚与 L3 人工介入建议
+- `Deployment` 单次 L1 自动处置闭环
 - Alertmanager Webhook 接入与事件幂等去重
 - `HealingRequest` 默认值、校验约束和状态语义
 - L1 写动作前的安全门禁：维护窗口、速率限制、爆炸半径、熔断
-- 写前快照创建失败即阻断，L2 回滚失败时自动尝试恢复 L1 前快照
+- 写前快照创建失败即阻断
 - K8s Event、结构化审计和 Prometheus 指标输出
+- Agent 所需的 incident summary / recommendation / handoff 状态语义
 - 质量门禁：`go test`、`race`、`vet`、`golangci-lint`、CRD/Helm 一致性检查
 
 当前明确不属于首发范围的能力：
 
 - `StatefulSet` 自动写动作
+- `Deployment` L2/L3 自动化恢复
 - 复杂发布门禁自动化
 - 完整生产级多集群放量编排
 - 额外的自定义 UI 查询后端或独立控制台读模型
+- Agent 驱动的生产写动作
 
 ## 核心链路
 
@@ -59,9 +61,9 @@ Orchestrator
         |
         +--> Deployment L1 动作
         |
-        +--> Deployment L2 健康版本回滚
+        +--> Agent 摘要 / 建议 / 交接
         |
-        +--> L3 人工介入建议
+        +--> 人工介入建议
         |
         +--> Audit / Event / Metrics
 ```
@@ -72,7 +74,7 @@ Orchestrator
 - [api/v1alpha1/healingrequest_types.go](api/v1alpha1/healingrequest_types.go): `HealingRequest` CRD 定义、默认值和校验约束
 - [internal/ingestion](internal/ingestion): Alertmanager Webhook 接入与幂等去重
 - [internal/controllers](internal/controllers): `HealingRequest` Reconciler
-- [internal/healing](internal/healing): 编排、快照、回滚与工作负载适配器
+- [internal/healing](internal/healing): 编排、快照与最小工作负载适配器
 - [internal/safety](internal/safety): 维护窗口、速率限制、爆炸半径、熔断等门禁逻辑
 - [internal/observability](internal/observability): 审计、事件和指标
 - [charts/kube-sentinel](charts/kube-sentinel): Helm values 与 schema
@@ -146,7 +148,21 @@ bash ./scripts/install-minimal.sh
 - `ghcr.io/yangyus8/kube-sentinel:vX.Y.Z-rc.N` / `-beta.N`：预发布镜像，仅用于联调和发布前验证。
 - `kube-sentinel/controller:latest`：本地构建默认镜像，仅用于当前工作区快速迭代，不应作为共享环境基线。
 
-### 2.5 首发发布执行路径
+### 2.5 运行模式
+
+默认安装会以最小自动动作模式启动：仅允许 Deployment L1 自动尝试。
+
+- `KUBE_SENTINEL_RUNTIME_MODE=minimal`：启用极简 V1 runtime，默认值。
+- `KUBE_SENTINEL_READ_ONLY_MODE=false`：允许 Deployment L1 自动动作，默认值。
+- `KUBE_SENTINEL_READ_ONLY_MODE=true`：退回只读模式，仅生成 incident、审计和建议，不执行自动写动作。
+
+只读模式示例：
+
+```bash
+KUBE_SENTINEL_READ_ONLY_MODE=true bash ./scripts/install-minimal.sh
+```
+
+### 2.6 首发发布执行路径
 
 首个可交付版本遵循固定顺序：预生产验证 -> RC 发布 -> pilot/cutover -> 稳定版发布。
 
@@ -461,6 +477,8 @@ manager 运行时也支持通过环境变量加载最小监听配置：
 - `KUBE_SENTINEL_METRICS_BIND_ADDRESS`
 - `KUBE_SENTINEL_HEALTH_PROBE_BIND_ADDRESS`
 - `KUBE_SENTINEL_WEBHOOK_BIND_ADDRESS`
+- `KUBE_SENTINEL_RUNTIME_MODE`
+- `KUBE_SENTINEL_READ_ONLY_MODE`
 - `KUBE_SENTINEL_WEBHOOK_PATH`
 
 [config/install/kube-sentinel.yaml](config/install/kube-sentinel.yaml) 使用这组环境变量把安装清单中的默认监听地址显式传给控制器。
