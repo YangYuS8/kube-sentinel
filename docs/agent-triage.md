@@ -52,6 +52,14 @@ V1 只支持 Telegram 主动通知，并将单个 incident 映射为两层消息
 - `blocked`
 - `recovered`
 
+当前主动通知通道只支持 Telegram。最小配置：
+
+- `KUBE_SENTINEL_TELEGRAM_BOT_TOKEN`
+- `KUBE_SENTINEL_TELEGRAM_CHAT_ID`
+- `KUBE_SENTINEL_TELEGRAM_BASE_URL`（可选，测试时可覆盖）
+
+如果 Telegram 发送失败，runtime 主流程仍继续，失败结果会通过事件或可观察记录暴露。
+
 ## 继续排查入口
 
 Telegram incident card 必须保留以下跳转语义：

@@ -500,6 +500,17 @@ manager 运行时也支持通过环境变量加载最小监听配置：
 - `KUBE_SENTINEL_WEBHOOK_BIND_ADDRESS`
 - `KUBE_SENTINEL_RUNTIME_MODE`
 - `KUBE_SENTINEL_READ_ONLY_MODE`
+- `KUBE_SENTINEL_TELEGRAM_BOT_TOKEN`
+- `KUBE_SENTINEL_TELEGRAM_CHAT_ID`
+- `KUBE_SENTINEL_TELEGRAM_BASE_URL`（可选，默认 `https://api.telegram.org`）
+
+启用 Telegram 主动通知示例：
+
+```bash
+KUBE_SENTINEL_TELEGRAM_BOT_TOKEN=<token> \
+KUBE_SENTINEL_TELEGRAM_CHAT_ID=<chat-id> \
+bash ./scripts/install-minimal.sh
+```
 - `KUBE_SENTINEL_WEBHOOK_PATH`
 
 [config/install/kube-sentinel.yaml](config/install/kube-sentinel.yaml) 使用这组环境变量把安装清单中的默认监听地址显式传给控制器。

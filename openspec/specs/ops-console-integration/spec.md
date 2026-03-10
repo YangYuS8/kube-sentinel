@@ -51,11 +51,15 @@
 - **那么** 系统必须允许其先在 Telegram 中查看 incident card，再通过 Agent、Headlamp、Grafana 或 kubectl 继续接手和排查
 
 ### 需求:Telegram 必须作为 V1 唯一主动通知通道
-系统必须将 Telegram 定义为 Agent v1 的唯一主动通知通道，并禁止在 V1 范围内同时要求多通道路由或复杂通知编排能力。
+系统必须将 Telegram 定义为 V1 唯一主动通知通道，并要求该通道具备真实发送闭环，而不是仅停留在模板或文案定义层。
 
 #### 场景: 单个 incident 进入主动通知路径
 - **当** Agent 需要为某个 incident 主动通知值班人员
 - **那么** 系统必须通过 Telegram 发送通知，而不得要求其他通知通道作为 V1 前置条件
+
+#### 场景: 启用 Telegram 通知
+- **当** 系统配置了 Telegram 发送能力并产生一个符合条件的 incident
+- **那么** 系统必须实际向 Telegram 发送通知，而不是仅在本地生成消息模板
 
 ### 需求:Agent 通知必须区分短版和长版
 系统必须为 Telegram 通知定义短版 ping 和长版 incident card 两层结构，禁止让夜间通知在第一条消息中同时承担唤醒和完整事故说明两种职责。

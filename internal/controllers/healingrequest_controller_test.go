@@ -13,7 +13,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	ksv1alpha1 "github.com/yangyus8/kube-sentinel/api/v1alpha1"
+	"github.com/yangyus8/kube-sentinel/internal/notify"
+	"github.com/yangyus8/kube-sentinel/internal/observability"
 )
+
+type stubNotifier struct{ err error }
+
+func (s stubNotifier) Notify(context.Context, *ksv1alpha1.HealingRequest) error { return s.err }
 
 type conflictOnceClient struct {
 	client.Client
@@ -93,3 +99,37 @@ func TestPatchStatusRetriesOnConflict(t *testing.T) {
 		t.Fatalf("expected persisted last action, got %s", stored.Status.LastAction)
 	}
 }
+
+func TestNotifyTelegramRecordsSuccessEvent(t *testing.T) {
+	reconciler := &HealingRequestReconciler{Notifier: stubNotifier{}, EventSink: &observability.MemoryEventSink{}}
+	resource := &ksv1alpha1.HealingRequest{
+		Spec:   ksv1alpha1.HealingRequestSpec{Workload: ksv1alpha1.WorkloadRef{Kind: "Deployment", Namespace: "default", Name: "api"}},
+		Status: ksv1alpha1.HealingRequestStatus{CorrelationKey: "default/hr-api"},
+	}
+	reconciler.notifyTelegram(context.Background(), resource)
+	events := reconciler.EventSink.(*observability.MemoryEventSink).Events
+	if len(events) != 1 {
+		t.Fatalf("expected one runtime event, got %d", len(events))
+	}
+	if events[0].Reason != "TelegramNotificationSent" {
+		t.Fatalf("expected TelegramNotificationSent, got %s", events[0].Reason)
+	}
+}
+
+func TestNotifyTelegramRecordsFailureWithoutReturning(t *testing.T) {
+	reconciler := &HealingRequestReconciler{Notifier: stubNotifier{err: errors.New("boom")}, EventSink: &observability.MemoryEventSink{}}
+	resource := &ksv1alpha1.HealingRequest{
+		Spec:   ksv1alpha1.HealingRequestSpec{Workload: ksv1alpha1.WorkloadRef{Kind: "Deployment", Namespace: "default", Name: "api"}},
+		Status: ksv1alpha1.HealingRequestStatus{CorrelationKey: "default/hr-api"},
+	}
+	reconciler.notifyTelegram(context.Background(), resource)
+	events := reconciler.EventSink.(*observability.MemoryEventSink).Events
+	if len(events) != 1 {
+		t.Fatalf("expected one runtime event, got %d", len(events))
+	}
+	if events[0].Reason != "TelegramNotificationFailed" {
+		t.Fatalf("expected TelegramNotificationFailed, got %s", events[0].Reason)
+	}
+}
+
+var _ notify.TelegramNotifier = stubNotifier{}

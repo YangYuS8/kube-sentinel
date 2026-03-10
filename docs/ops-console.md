@@ -14,6 +14,7 @@
 通知入口前置条件：
 
 - 已配置 Telegram 机器人或等价发送端。
+- 已设置 `KUBE_SENTINEL_TELEGRAM_BOT_TOKEN` 与 `KUBE_SENTINEL_TELEGRAM_CHAT_ID`。
 - Agent v1 输出可被映射为短版 ping 和长版 incident card。
 
 理解入口前置条件：

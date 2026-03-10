@@ -9,6 +9,9 @@ IMAGE_BUILDER="${KUBE_SENTINEL_IMAGE_BUILDER:-}"
 DRY_RUN="${KUBE_SENTINEL_INSTALL_DRY_RUN:-false}"
 RUNTIME_MODE="${KUBE_SENTINEL_RUNTIME_MODE:-minimal}"
 READ_ONLY_MODE="${KUBE_SENTINEL_READ_ONLY_MODE:-false}"
+TELEGRAM_BOT_TOKEN="${KUBE_SENTINEL_TELEGRAM_BOT_TOKEN:-}"
+TELEGRAM_CHAT_ID="${KUBE_SENTINEL_TELEGRAM_CHAT_ID:-}"
+TELEGRAM_BASE_URL="${KUBE_SENTINEL_TELEGRAM_BASE_URL:-}"
 MANIFEST_TEMPLATE="${ROOT_DIR}/config/install/kube-sentinel.yaml"
 CRD_FILE="${ROOT_DIR}/config/crd/_healingrequests.yaml"
 
@@ -81,6 +84,9 @@ render_manifest() {
     -e "s|__KUBE_SENTINEL_IMAGE__|${IMAGE}|g" \
     -e "s|__KUBE_SENTINEL_RUNTIME_MODE__|${RUNTIME_MODE}|g" \
     -e "s|__KUBE_SENTINEL_READ_ONLY_MODE__|${READ_ONLY_MODE}|g" \
+    -e "s|__KUBE_SENTINEL_TELEGRAM_BOT_TOKEN__|${TELEGRAM_BOT_TOKEN}|g" \
+    -e "s|__KUBE_SENTINEL_TELEGRAM_CHAT_ID__|${TELEGRAM_CHAT_ID}|g" \
+    -e "s|__KUBE_SENTINEL_TELEGRAM_BASE_URL__|${TELEGRAM_BASE_URL}|g" \
     "$MANIFEST_TEMPLATE"
 }
 
@@ -173,6 +179,7 @@ main() {
   echo "  2. 在另一个终端运行 bash ./scripts/dev-local-loop.sh connect-cluster"
   echo "  3. 执行 bash ./scripts/drill-runtime-closed-loop.sh default"
   echo "  4. 只读模式示例: KUBE_SENTINEL_READ_ONLY_MODE=true bash ./scripts/install-minimal.sh"
+  echo "  5. Telegram 示例: KUBE_SENTINEL_TELEGRAM_BOT_TOKEN=<token> KUBE_SENTINEL_TELEGRAM_CHAT_ID=<chat> bash ./scripts/install-minimal.sh"
   if ! bool_is_true "$BUILD_IMAGE"; then
     echo "  NOTE: 你跳过了镜像构建；若 Pod ImagePullBackOff，请先执行 docker/podman build，并在 minikube 中执行 minikube image load ${IMAGE}"
   fi

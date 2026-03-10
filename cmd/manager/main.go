@@ -20,6 +20,7 @@ import (
 	"github.com/yangyus8/kube-sentinel/internal/controllers"
 	"github.com/yangyus8/kube-sentinel/internal/healing"
 	"github.com/yangyus8/kube-sentinel/internal/ingestion"
+	"github.com/yangyus8/kube-sentinel/internal/notify"
 	"github.com/yangyus8/kube-sentinel/internal/observability"
 )
 
@@ -44,9 +45,14 @@ func run() error {
 	webhookPath := envOrDefault("KUBE_SENTINEL_WEBHOOK_PATH", "/alertmanager/webhook")
 	runtimeMode := parseRuntimeMode(envOrDefault("KUBE_SENTINEL_RUNTIME_MODE", string(healing.RuntimeModeMinimal)))
 	readOnlyMode := envBoolOrDefault("KUBE_SENTINEL_READ_ONLY_MODE", false)
+	telegramConfig := notify.TelegramConfig{
+		BotToken: envOrDefault("KUBE_SENTINEL_TELEGRAM_BOT_TOKEN", ""),
+		ChatID:   envOrDefault("KUBE_SENTINEL_TELEGRAM_CHAT_ID", ""),
+		BaseURL:  envOrDefault("KUBE_SENTINEL_TELEGRAM_BASE_URL", ""),
+	}
 	observability.RegisterPrometheusMetrics()
 
-	setupLog.Info("starting kube-sentinel manager", "metricsAddr", metricsAddr, "probeAddr", probeAddr, "webhookAddr", webhookAddr, "webhookPath", webhookPath, "runtimeMode", runtimeMode, "readOnlyMode", readOnlyMode)
+	setupLog.Info("starting kube-sentinel manager", "metricsAddr", metricsAddr, "probeAddr", probeAddr, "webhookAddr", webhookAddr, "webhookPath", webhookPath, "runtimeMode", runtimeMode, "readOnlyMode", readOnlyMode, "telegramEnabled", strings.TrimSpace(telegramConfig.BotToken) != "" && strings.TrimSpace(telegramConfig.ChatID) != "")
 
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -68,12 +74,14 @@ func run() error {
 		return fmt.Errorf("create controller manager: %w", err)
 	}
 
+	eventSink := &observability.MemoryEventSink{}
+	runtimeAuditSink := &observability.MemoryAuditSink{}
 	orchestrator := &healing.Orchestrator{
 		Adapter:     healing.NewDeploymentAdapter(mgr.GetClient()),
 		Snapshotter: healing.NewKubernetesSnapshotter(mgr.GetClient()),
 		Metrics:     &observability.Metrics{},
-		AuditSink:   &observability.MemoryAuditSink{},
-		EventSink:   &observability.MemoryEventSink{},
+		AuditSink:   runtimeAuditSink,
+		EventSink:   eventSink,
 		Mode:        runtimeMode,
 		ReadOnly:    readOnlyMode,
 	}
@@ -82,16 +90,18 @@ func run() error {
 		Client:       mgr.GetClient(),
 		Scheme:       mgr.GetScheme(),
 		Orchestrator: orchestrator,
+		EventSink:    eventSink,
+		Notifier:     notify.NewTelegramNotifier(telegramConfig),
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup HealingRequest controller: %w", err)
 	}
 	setupLog.Info("registered HealingRequest controller")
 
-	auditSink := &observability.MemoryAuditSink{}
+	receiverAuditSink := &observability.MemoryAuditSink{}
 	receiver := &ingestion.Receiver{
 		Client:    mgr.GetClient(),
 		Dedupe:    ingestion.NewMemoryDedupeStore(),
-		AuditSink: auditSink,
+		AuditSink: receiverAuditSink,
 	}
 	http.HandleFunc(webhookPath, receiver.HandleWebhook)
 	go func() {

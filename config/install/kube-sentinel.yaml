@@ -77,6 +77,12 @@ spec:
               value: __KUBE_SENTINEL_RUNTIME_MODE__
             - name: KUBE_SENTINEL_READ_ONLY_MODE
               value: __KUBE_SENTINEL_READ_ONLY_MODE__
+            - name: KUBE_SENTINEL_TELEGRAM_BOT_TOKEN
+              value: __KUBE_SENTINEL_TELEGRAM_BOT_TOKEN__
+            - name: KUBE_SENTINEL_TELEGRAM_CHAT_ID
+              value: __KUBE_SENTINEL_TELEGRAM_CHAT_ID__
+            - name: KUBE_SENTINEL_TELEGRAM_BASE_URL
+              value: __KUBE_SENTINEL_TELEGRAM_BASE_URL__
           ports:
             - name: metrics
               containerPort: 8080
