@@ -321,10 +321,6 @@ spec:
                 type: array
               correlationKey:
                 type: string
-              handoffNote:
-                type: string
-              incidentSummary:
-                type: string
               deploymentL2Candidate:
                 type: string
               deploymentL2Decision:
@@ -338,6 +334,10 @@ spec:
               gateOutcome:
                 type: string
               gateReasonCode:
+                type: string
+              handoffNote:
+                type: string
+              incidentSummary:
                 type: string
               lastAction:
                 type: string

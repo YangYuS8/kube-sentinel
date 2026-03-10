@@ -1,7 +1,8 @@
 # Agent + Headlamp + Grafana 运维接入
 
-本文档描述 Kube-Sentinel 极简 V1 的多入口运维接入方式。范围明确分为三类：
+本文档描述 Kube-Sentinel 极简 V1 的多入口运维接入方式。范围明确分为四类：
 
+- 通知入口：通过 Telegram 接收短版 ping 和长版 incident card。
 - 理解入口：通过 Agent 获取 incident summary、next-step recommendation 和 handoff note。
 - 对象视图：通过 Headlamp 或其他 Kubernetes 原生控制台直接查看 HealingRequest、关联 workload 和 K8s Event。
 - 指标视图：通过 Prometheus + Grafana 直接消费 `kube_sentinel_*` 指标查看趋势。
@@ -9,6 +10,11 @@
 当前不提供自定义 UI 后端，也不提供新的写操作入口。多入口集成仅用于解释、只读诊断与观测。
 
 ## 前置条件
+
+通知入口前置条件：
+
+- 已配置 Telegram 机器人或等价发送端。
+- Agent v1 输出可被映射为短版 ping 和长版 incident card。
 
 理解入口前置条件：
 
@@ -40,6 +46,18 @@
    - 能直接读取当前 incident 摘要
    - 能区分建议类别（观察、监控、调查、人工动作）
    - 能生成可复制的交接说明
+
+## 通知入口验证
+
+1. 选择一个 `auto-tried`、`blocked` 或 `recovered` incident。
+2. 确认 Telegram 至少收到两层内容：
+   - 短版 ping
+   - 长版 incident card
+3. 确认长版消息至少包含：
+   - 当前状态或动作结果
+   - 焦点分类
+   - 下一步建议
+   - `HealingRequest` / Grafana / kubectl 继续排查入口
 
 ## 对象视图验证
 
@@ -95,6 +113,10 @@ config/monitoring/kube-sentinel-grafana-dashboard.json
 
 ## 本地开发回路中的分工
 
+通知入口验证：
+
+- 配置 Telegram 发送端后，触发一个 drill 或真实 incident，确认短版/长版消息结构稳定。
+
 理解入口验证：
 
 - 先执行 [scripts/install-minimal.sh](../scripts/install-minimal.sh) 或 [scripts/dev-local-loop.sh](../scripts/dev-local-loop.sh) 完成 CRD 与控制器安装。
@@ -112,6 +134,7 @@ config/monitoring/kube-sentinel-grafana-dashboard.json
 
 不要把多入口验证和控制器功能验证混为一步：
 
+- Telegram 验证关注通知是否足够短、是否能把人带到正确的排查入口。
 - Agent 验证关注摘要、建议与交接是否清楚。
 - 控制器功能验证关注闭环是否执行正确。
 - 对象视图验证关注资源和状态语义是否便于排障。

@@ -41,6 +41,15 @@ type Metrics struct {
 	ReleaseReadinessOverrides  uint64
 }
 
+type TriageMetricsSnapshot struct {
+	Triggers              uint64
+	Failures              uint64
+	ReadOnlyBlocks        uint64
+	Suppressed            uint64
+	DeploymentL1Successes uint64
+	DeploymentL1Failures  uint64
+}
+
 var (
 	registerMetricsOnce sync.Once
 
@@ -271,6 +280,20 @@ func (m *Metrics) IncStatefulSetL2Result(result string) {
 		atomic.AddUint64(&m.StatefulSetL2Degrades, 1)
 	}
 	statefulSetL2ResultCounter.WithLabelValues(result).Inc()
+}
+
+func (m *Metrics) SnapshotForTriage() TriageMetricsSnapshot {
+	if m == nil {
+		return TriageMetricsSnapshot{}
+	}
+	return TriageMetricsSnapshot{
+		Triggers:              atomic.LoadUint64(&m.Triggers),
+		Failures:              atomic.LoadUint64(&m.Failures),
+		ReadOnlyBlocks:        atomic.LoadUint64(&m.ReadOnlyBlocks),
+		Suppressed:            atomic.LoadUint64(&m.Suppressed),
+		DeploymentL1Successes: atomic.LoadUint64(&m.DeploymentL1Successes),
+		DeploymentL1Failures:  atomic.LoadUint64(&m.DeploymentL1Failures),
+	}
 }
 
 func (m *Metrics) IncSnapshotCreateSuccess() {

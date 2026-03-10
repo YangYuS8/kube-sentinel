@@ -10,6 +10,7 @@ import (
 	"time"
 
 	ksv1alpha1 "github.com/yangyus8/kube-sentinel/api/v1alpha1"
+	"github.com/yangyus8/kube-sentinel/internal/agent"
 	"github.com/yangyus8/kube-sentinel/internal/observability"
 	"github.com/yangyus8/kube-sentinel/internal/safety"
 	"k8s.io/client-go/tools/record"
@@ -1039,64 +1040,11 @@ func recommendationTypeFor(status ksv1alpha1.HealingRequestStatus) string {
 }
 
 func buildIncidentSummary(req *ksv1alpha1.HealingRequest) string {
-	if req == nil {
-		return ""
-	}
-	parts := []string{}
-	if req.Spec.Workload.Namespace != "" && req.Spec.Workload.Name != "" {
-		parts = append(parts, fmt.Sprintf("workload=%s/%s", req.Spec.Workload.Namespace, req.Spec.Workload.Name))
-	}
-	if req.Spec.Workload.Kind != "" {
-		parts = append(parts, fmt.Sprintf("kind=%s", req.Spec.Workload.Kind))
-	}
-	if req.Status.Phase != "" {
-		parts = append(parts, fmt.Sprintf("phase=%s", req.Status.Phase))
-	}
-	if req.Status.LastAction != "" {
-		parts = append(parts, fmt.Sprintf("action=%s", req.Status.LastAction))
-	}
-	if req.Status.BlockReasonCode != "" {
-		parts = append(parts, fmt.Sprintf("reason=%s", req.Status.BlockReasonCode))
-	} else if req.Status.LastError != "" {
-		parts = append(parts, fmt.Sprintf("reason=%s", req.Status.LastError))
-	}
-	if req.Status.CorrelationKey != "" {
-		parts = append(parts, fmt.Sprintf("correlation=%s", req.Status.CorrelationKey))
-	}
-	return strings.Join(parts, "; ")
+	return agent.BuildReport(req, agent.Evidence{}).Summary
 }
 
 func buildHandoffNote(req *ksv1alpha1.HealingRequest) string {
-	if req == nil {
-		return ""
-	}
-	timestamp := "unknown-time"
-	if !req.CreationTimestamp.IsZero() {
-		timestamp = req.CreationTimestamp.UTC().Format(time.RFC3339)
-	}
-	reason := req.Status.BlockReasonCode
-	if reason == "" {
-		reason = req.Status.LastError
-	}
-	parts := []string{
-		fmt.Sprintf("%s incident for %s/%s (%s)", timestamp, req.Spec.Workload.Namespace, req.Spec.Workload.Name, req.Spec.Workload.Kind),
-	}
-	if req.Status.LastAction != "" {
-		parts = append(parts, fmt.Sprintf("last action: %s", req.Status.LastAction))
-	}
-	if req.Status.Phase != "" {
-		parts = append(parts, fmt.Sprintf("phase: %s", req.Status.Phase))
-	}
-	if reason != "" {
-		parts = append(parts, fmt.Sprintf("reason: %s", reason))
-	}
-	if req.Status.NextRecommendation != "" {
-		parts = append(parts, fmt.Sprintf("next step: %s", req.Status.NextRecommendation))
-	}
-	if req.Status.CorrelationKey != "" {
-		parts = append(parts, fmt.Sprintf("correlation: %s", req.Status.CorrelationKey))
-	}
-	return strings.Join(parts, "; ")
+	return agent.BuildReport(req, agent.Evidence{}).Handoff
 }
 
 func blockedWriteShadowAction(req *ksv1alpha1.HealingRequest, reason string) string {

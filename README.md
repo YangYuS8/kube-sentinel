@@ -9,6 +9,7 @@ Kube-Sentinel 是一个面向 Kubernetes 夜间值班场景的轻量哨兵工具
 - 对 Deployment 执行一次安全优先的 L1 最小动作尝试
 - 在任何自动写操作前执行门禁判定与快照校验
 - 输出结构化审计记录、运行时事件和指标，并为 Agent/Headlamp/Grafana/kubectl 提供稳定关联键
+- 通过 Agent v1 输出固定五段式分诊结果，并生成 Telegram incident card
 
 它不是完整可观测平台，也不是自治运维平台。当前版本的目标，是交付一个可快速部署、可解释、可人工接管的夜间值班哨兵。
 
@@ -77,9 +78,11 @@ Orchestrator
 - [internal/healing](internal/healing): 编排、快照与最小工作负载适配器
 - [internal/safety](internal/safety): 维护窗口、速率限制、爆炸半径、熔断等门禁逻辑
 - [internal/observability](internal/observability): 审计、事件和指标
+- [internal/agent](internal/agent): Agent v1 分诊契约、输入分层与 Telegram 通知模板
 - [charts/kube-sentinel](charts/kube-sentinel): Helm values 与 schema
 - [docs/release-and-rollback.md](docs/release-and-rollback.md): 发布、灰度和回滚说明
 - [docs/ops-console.md](docs/ops-console.md): Headlamp 对象视图与 Grafana 指标视图接入说明
+- [docs/agent-triage.md](docs/agent-triage.md): Agent v1 五段式输出、输入分层与 Telegram 通知说明
 
 ## 环境要求
 
@@ -192,6 +195,24 @@ bash ./scripts/v1-release-execution.sh
 ```
 
 预演和放行记录默认归档到 `.tmp/v1-release-execution/<stage>-<version>/`，至少包含发布 trace、delivery pipeline 输出和 release plan 摘要。
+
+### 2.7 Agent v1 分诊与 Telegram 通知
+
+Agent v1 负责夜间值班分诊，而不是自治执行。默认输出固定为五段：
+
+- `what happened`
+- `what runtime did`
+- `current focus`
+- `next steps`
+- `handoff`
+
+V1 主动通知只支持 Telegram，并区分：
+
+- `auto-tried`
+- `blocked`
+- `recovered`
+
+详细说明见 [docs/agent-triage.md](docs/agent-triage.md)。
 
 ### 3. 准备本地集群上下文
 
