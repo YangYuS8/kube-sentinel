@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -129,6 +130,45 @@ func TestNotifyTelegramRecordsFailureWithoutReturning(t *testing.T) {
 	}
 	if events[0].Reason != "TelegramNotificationFailed" {
 		t.Fatalf("expected TelegramNotificationFailed, got %s", events[0].Reason)
+	}
+}
+
+func TestNotifyTelegramSuppressesDuplicateOncallState(t *testing.T) {
+	now := time.Unix(1000, 0)
+	reconciler := &HealingRequestReconciler{Notifier: stubNotifier{}, EventSink: &observability.MemoryEventSink{}, Now: func() time.Time { return now }}
+	resource := &ksv1alpha1.HealingRequest{
+		Spec:   ksv1alpha1.HealingRequestSpec{Workload: ksv1alpha1.WorkloadRef{Kind: "Deployment", Namespace: "default", Name: "api"}},
+		Status: ksv1alpha1.HealingRequestStatus{Phase: ksv1alpha1.PhaseBlocked, CorrelationKey: "default/hr-api"},
+	}
+	reconciler.notifyTelegram(context.Background(), resource)
+	reconciler.notifyTelegram(context.Background(), resource)
+	events := reconciler.EventSink.(*observability.MemoryEventSink).Events
+	if len(events) != 2 {
+		t.Fatalf("expected sent + suppressed events, got %d", len(events))
+	}
+	if events[1].Reason != "TelegramNotificationSuppressed" {
+		t.Fatalf("expected suppression event, got %s", events[1].Reason)
+	}
+}
+
+func TestNotifyTelegramSuppressesRepeatedFailuresWithinWindow(t *testing.T) {
+	now := time.Unix(1000, 0)
+	reconciler := &HealingRequestReconciler{Notifier: stubNotifier{err: errors.New("boom")}, EventSink: &observability.MemoryEventSink{}, Now: func() time.Time { return now }}
+	resource := &ksv1alpha1.HealingRequest{
+		Spec:   ksv1alpha1.HealingRequestSpec{Workload: ksv1alpha1.WorkloadRef{Kind: "Deployment", Namespace: "default", Name: "api"}},
+		Status: ksv1alpha1.HealingRequestStatus{Phase: ksv1alpha1.PhaseBlocked, CorrelationKey: "default/hr-api"},
+	}
+	reconciler.notifyTelegram(context.Background(), resource)
+	reconciler.notifyTelegram(context.Background(), resource)
+	events := reconciler.EventSink.(*observability.MemoryEventSink).Events
+	if len(events) != 2 {
+		t.Fatalf("expected failed + suppressed events, got %d", len(events))
+	}
+	if events[0].Reason != "TelegramNotificationFailed" {
+		t.Fatalf("expected initial failure event, got %s", events[0].Reason)
+	}
+	if events[1].Reason != "TelegramNotificationSuppressed" {
+		t.Fatalf("expected suppression event, got %s", events[1].Reason)
 	}
 }
 

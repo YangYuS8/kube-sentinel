@@ -258,6 +258,27 @@ func TestOrchestratorMinimalModeDeploymentL1FailureStopsWithoutL2(t *testing.T) 
 	}
 }
 
+func TestOrchestratorMinimalModeResolvedAlertBecomesSuppressed(t *testing.T) {
+	req := newReq()
+	req.Annotations = map[string]string{
+		"kube-sentinel.io/alert-status":   "resolved",
+		"kube-sentinel.io/alert-category": "CrashLoopBackOff",
+		"kube-sentinel.io/alert-severity": "Critical",
+	}
+	o := &Orchestrator{
+		Adapter:     fakeAdapter{supports: true},
+		Snapshotter: &MemorySnapshotter{},
+		Mode:        RuntimeModeMinimal,
+		Now:         func() time.Time { return time.Unix(1000, 0) },
+	}
+	if _, err := o.Process(context.Background(), req); err != nil {
+		t.Fatalf("expected resolved alert to suppress cleanly: %v", err)
+	}
+	if req.Status.Phase != ksv1alpha1.PhaseSuppressed {
+		t.Fatalf("expected suppressed phase, got %s", req.Status.Phase)
+	}
+}
+
 func TestOrchestratorCorrelationAndEvent(t *testing.T) {
 	req := newReq()
 	req.Annotations = map[string]string{"kube-sentinel.io/correlation-key": "trace-1"}

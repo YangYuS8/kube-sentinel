@@ -10,6 +10,20 @@ Agent v1 只负责：
 - 给出下一步建议
 - 生成可复制的交接说明
 
+## Oncall State 翻译层
+
+Agent v1 不直接把所有 runtime `phase` 原样暴露给值班人，而是先翻译成更稳定的值班状态：
+
+- `Pending` / `PendingVerify` -> `observing`
+- `Blocked` / `L3` -> `blocked`
+- `L1` / `Completed` -> `auto-tried`
+- `Suppressed` -> `recovered`
+
+其中：
+
+- `phase` 仍保留为事实层
+- `oncall state` 负责 Telegram 标题、值班解释和演练断言
+
 ## 五段式输出
 
 Agent v1 为单个 incident 固定输出以下五段：
@@ -48,6 +62,7 @@ V1 只支持 Telegram 主动通知，并将单个 incident 映射为两层消息
 
 支持的通知类别：
 
+- `observing`
 - `auto-tried`
 - `blocked`
 - `recovered`
@@ -59,6 +74,12 @@ V1 只支持 Telegram 主动通知，并将单个 incident 映射为两层消息
 - `KUBE_SENTINEL_TELEGRAM_BASE_URL`（可选，测试时可覆盖）
 
 如果 Telegram 发送失败，runtime 主流程仍继续，失败结果会通过事件或可观察记录暴露。
+
+默认降噪策略：
+
+- 同一 incident 在同一 `oncall state` 下不会重复发送等价 Telegram 消息。
+- `observing` 采用低噪音策略，样本推进不会持续刷屏。
+- 同一 incident 的 Telegram 发送失败会在短时间内抑制重复失败事件。
 
 ## 继续排查入口
 

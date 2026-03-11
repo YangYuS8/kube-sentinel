@@ -45,6 +45,7 @@
    - `correlationKey`
 3. 通过 Agent 或等价消费方验证：
    - 能直接读取当前 incident 摘要
+   - 能区分真实 `phase` 和对外 `oncall state`
    - 能区分建议类别（观察、监控、调查、人工动作）
    - 能生成可复制的交接说明
 

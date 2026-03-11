@@ -461,6 +461,20 @@ func (o *Orchestrator) runtimeMode() RuntimeMode {
 func (o *Orchestrator) processMinimalRuntime(ctx context.Context, req *ksv1alpha1.HealingRequest, breaker *safety.CircuitBreaker, runtimeInput RuntimeInput) (ProcessResult, error) {
 	result := ProcessResult{}
 	o.resetNonCoreStatus(req)
+	if hasAlertMetadata(req) && isResolvedAlert(req) {
+		req.Status.Phase = ksv1alpha1.PhaseSuppressed
+		req.Status.SuppressedAt = o.Now().Format(time.RFC3339)
+		req.Status.LastAction = "suppressed"
+		req.Status.LastEventReason = "suppressed-during-soak"
+		req.Status.LastEvidenceStatus = "suppressed"
+		req.Status.NextRecommendation = "no immediate action required; continue passive observation"
+		o.emitRuntimeEvent(req, "Normal", "Suppressed", "alert recovered during observation window")
+		o.writeAudit(req, "suppressed", "alert recovered during observation window")
+		if o.Metrics != nil {
+			o.Metrics.IncSuppressed()
+		}
+		return result, nil
+	}
 	if req.Spec.Workload.Kind != "Deployment" {
 		if o.Metrics != nil {
 			o.Metrics.IncFailures()

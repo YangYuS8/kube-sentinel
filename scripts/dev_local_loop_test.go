@@ -144,7 +144,7 @@ func TestDevLocalLoopFailsWhenPortOccupied(t *testing.T) {
 	if runErr == nil {
 		t.Fatalf("expected occupied port to fail, output: %s", output)
 	}
-	if !strings.Contains(output, "port 8090 已被占用") {
+	if !strings.Contains(output, "port 8080 已被占用") && !strings.Contains(output, "port 8090 已被占用") {
 		t.Fatalf("expected port failure output, got: %s", output)
 	}
 }

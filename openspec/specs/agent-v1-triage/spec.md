@@ -5,11 +5,18 @@
 ## 需求
 
 ### 需求:Agent v1 必须输出固定五段式结构
-系统必须为 Agent v1 提供固定输出契约，至少包括 `what happened`、`what runtime did`、`current focus`、`next steps` 和 `handoff` 五段，禁止仅返回无法稳定消费的自由文本总结。
+系统必须为 Agent v1 提供固定输出契约，至少包括 `what happened`、`what runtime did`、`current focus`、`next steps` 和 `handoff` 五段；其中 `what happened` 可保留 phase 作为事实字段，但 `what runtime did` 必须优先使用 oncall state 解释当前值班语义，禁止仅返回无法稳定消费的自由文本总结。
 
 #### 场景: 值班人员查询单个 incident
 - **当** 值班人员通过 Agent 查询某个 incident 的当前状态
 - **那么** Agent 必须按照五段式结构返回解释结果，并保持字段顺序和语义稳定
+
+### 需求:Agent 必须区分事实层和值班层
+系统必须让 Agent 输出同时支持事实层和值班层：`what happened` 可以表达真实 phase，`what runtime did` 和值班解释必须优先基于 oncall state，而不是直接把 phase 原样暴露为值班结论。
+
+#### 场景: phase 为 PendingVerify 时生成值班解释
+- **当** Agent 读取到 incident 的真实 phase 为 `PendingVerify`
+- **那么** Agent 必须将其解释为“正在观察”，而不是把 `PendingVerify` 直接当作值班结论输出
 
 ### 需求:Agent v1 必须采用输入分层模型
 系统必须将 Agent v1 输入划分为 `core`、`evidence` 和 `legacy` 三层，禁止让 legacy 自动化或治理语义默认进入 Agent v1 的主解释路径。

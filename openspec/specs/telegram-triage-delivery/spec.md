@@ -12,11 +12,29 @@
 - **那么** 系统必须将对应的 Agent v1 分诊结果发送到 Telegram
 
 ### 需求:Telegram 发送必须保留短版和长版两层消息
-系统必须为 Telegram 发送保留短版 ping 和长版 incident card 两层消息结构，禁止把第一条消息设计成同时承担唤醒与完整事故报告的单条长文。
+系统必须为 Telegram 发送保留短版 ping 和长版 incident card 两层消息结构，且发送策略必须考虑去重和抑制规则，两层消息都必须基于 oncall state 而不是 phase 原值组织标题和首句，禁止把第一条消息设计成同时承担唤醒与完整事故报告的单条长文。
 
 #### 场景: 发送 blocked incident
 - **当** 某个 blocked incident 进入 Telegram 通知路径
 - **那么** 系统必须先发送短版 ping，再提供长版 incident card
+
+#### 场景: 相同 oncall state 重复触发发送
+- **当** 同一 incident 在同一 oncall state 下再次进入 Telegram 发送路径
+- **那么** 系统必须抑制等价的重复消息
+
+### 需求:Telegram 发送必须按 oncall state 决定默认强度
+系统必须根据 oncall state 决定 Telegram 通知的默认强度，并明确 `observing` 不得与 `blocked` 采用同等重复发送策略。
+
+#### 场景: observing 和 blocked 的发送策略不同
+- **当** 两个 incident 分别处于 `observing` 和 `blocked`
+- **那么** 系统必须允许 `blocked` 采用更强的提醒策略，而对 `observing` 采用更克制的发送策略
+
+### 需求:Telegram 标题必须基于 oncall state 生成
+系统必须让 Telegram 通知标题和首句优先基于 oncall state 生成，禁止直接以内部 phase 原值作为夜间第一视图。
+
+#### 场景: PendingVerify 进入 Telegram 通知
+- **当** 某个 incident 的真实 phase 为 `PendingVerify`
+- **那么** Telegram 标题必须表达为 `observing` 语义，而不得直接显示 `PendingVerify`
 
 ### 需求:Telegram 发送不得绕过 Agent 输出契约
 系统必须让 Telegram 发送层直接消费已有 Agent v1 输出，禁止在发送路径中重新实现焦点分类、根因判断或另一套通知语义。

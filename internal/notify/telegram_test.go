@@ -61,6 +61,36 @@ func TestTelegramNotifierSendsTwoMessages(t *testing.T) {
 	}
 }
 
+func TestTelegramNotifierUsesObservingTitle(t *testing.T) {
+	var requests []sendMessageRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+		var payload sendMessageRequest
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		requests = append(requests, payload)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+	request := testRequest()
+	request.Status.Phase = ksv1alpha1.PhasePendingVerify
+	request.Status.LastAction = "pending-verify"
+	request.Status.BlockReasonCode = ""
+	request.Status.NextRecommendation = "continue observing soak verification until enough stable samples are collected"
+	notifier := NewTelegramNotifier(TelegramConfig{BotToken: "token", ChatID: "chat", BaseURL: server.URL})
+	if err := notifier.Notify(context.Background(), request); err != nil {
+		t.Fatalf("notify failed: %v", err)
+	}
+	if len(requests) == 0 || requests[0].Text == "" {
+		t.Fatalf("expected observing messages")
+	}
+	if requests[0].Text[:6] != "[WAIT]" {
+		t.Fatalf("expected observing short message, got %q", requests[0].Text)
+	}
+}
+
 func TestTelegramNotifierReturnsErrorOnHTTPFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)

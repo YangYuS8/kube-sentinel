@@ -31,9 +31,19 @@ const (
 type NotificationKind string
 
 const (
+	NotificationObserving NotificationKind = "observing"
 	NotificationAutoTried NotificationKind = "auto-tried"
 	NotificationBlocked   NotificationKind = "blocked"
 	NotificationRecovered NotificationKind = "recovered"
+)
+
+type OncallState string
+
+const (
+	OncallStateObserving OncallState = "observing"
+	OncallStateBlocked   OncallState = "blocked"
+	OncallStateAutoTried OncallState = "auto-tried"
+	OncallStateRecovered OncallState = "recovered"
 )
 
 var StatusFieldTiers = map[string]InputTier{
@@ -89,6 +99,7 @@ type Evidence struct {
 type Report struct {
 	WhatHappened   []string
 	WhatRuntimeDid []string
+	OncallState    OncallState
 	CurrentFocus   Focus
 	FocusDetail    string
 	NextSteps      []string
@@ -106,6 +117,7 @@ type Notification struct {
 func BuildReport(req *ksv1alpha1.HealingRequest, evidence Evidence) Report {
 	report := Report{}
 	if req == nil {
+		report.OncallState = OncallStateBlocked
 		report.CurrentFocus = FocusInsufficientEvidence
 		report.FocusDetail = "incident object is unavailable"
 		report.NextSteps = []string{"inspect runtime state source before continuing"}
@@ -123,13 +135,14 @@ func BuildReport(req *ksv1alpha1.HealingRequest, evidence Evidence) Report {
 		trigger = "unknown-trigger"
 	}
 	workload := fmt.Sprintf("%s/%s (%s)", req.Spec.Workload.Namespace, req.Spec.Workload.Name, req.Spec.Workload.Kind)
+	report.OncallState = TranslateOncallState(req)
 	report.WhatHappened = []string{
 		fmt.Sprintf("workload: %s", workload),
 		fmt.Sprintf("trigger: %s", trigger),
 		fmt.Sprintf("phase: %s", req.Status.Phase),
 	}
 
-	report.WhatRuntimeDid = whatRuntimeDid(req)
+	report.WhatRuntimeDid = whatRuntimeDid(req, report.OncallState)
 	report.CurrentFocus, report.FocusDetail = classifyFocus(req, evidence, trigger)
 	report.NextSteps = nextStepsFor(req, report.CurrentFocus)
 	report.Handoff = buildHandoff(req, report.CurrentFocus)
@@ -138,20 +151,40 @@ func BuildReport(req *ksv1alpha1.HealingRequest, evidence Evidence) Report {
 	return report
 }
 
-func whatRuntimeDid(req *ksv1alpha1.HealingRequest) []string {
+func TranslateOncallState(req *ksv1alpha1.HealingRequest) OncallState {
+	if req == nil {
+		return OncallStateBlocked
+	}
+	switch req.Status.Phase {
+	case ksv1alpha1.PhasePending, ksv1alpha1.PhasePendingVerify:
+		return OncallStateObserving
+	case ksv1alpha1.PhaseBlocked, ksv1alpha1.PhaseL3:
+		return OncallStateBlocked
+	case ksv1alpha1.PhaseL1, ksv1alpha1.PhaseCompleted:
+		return OncallStateAutoTried
+	case ksv1alpha1.PhaseSuppressed:
+		return OncallStateRecovered
+	default:
+		if strings.EqualFold(strings.TrimSpace(req.Annotations["kube-sentinel.io/alert-status"]), "resolved") {
+			return OncallStateRecovered
+		}
+		return OncallStateBlocked
+	}
+}
+
+func whatRuntimeDid(req *ksv1alpha1.HealingRequest, oncallState OncallState) []string {
 	if req == nil {
 		return []string{"runtime action unavailable"}
 	}
-	phase := req.Status.Phase
 	action := strings.TrimSpace(req.Status.LastAction)
 	if action == "" || action == "manual-intervention" {
 		action = "no automatic write action executed"
 	}
 	lines := []string{fmt.Sprintf("runtime action: %s", action)}
-	switch phase {
-	case ksv1alpha1.PhaseCompleted:
-		lines = append(lines, "runtime result: completed current minimal action path")
-	case ksv1alpha1.PhaseBlocked, ksv1alpha1.PhaseL3:
+	switch oncallState {
+	case OncallStateAutoTried:
+		lines = append(lines, "runtime status: auto-tried one minimal recovery action")
+	case OncallStateBlocked:
 		reason := strings.TrimSpace(req.Status.BlockReasonCode)
 		if reason == "" {
 			reason = strings.TrimSpace(req.Status.LastError)
@@ -159,13 +192,13 @@ func whatRuntimeDid(req *ksv1alpha1.HealingRequest) []string {
 		if reason == "" {
 			reason = "manual follow-up required"
 		}
-		lines = append(lines, fmt.Sprintf("runtime result: blocked because %s", reason))
-	case ksv1alpha1.PhaseSuppressed:
-		lines = append(lines, "runtime result: no write action required after observation")
-	case ksv1alpha1.PhasePendingVerify:
-		lines = append(lines, "runtime result: observing before taking further action")
+		lines = append(lines, fmt.Sprintf("runtime status: blocked because %s", reason))
+	case OncallStateRecovered:
+		lines = append(lines, "runtime status: recovered or no further action required after observation")
+	case OncallStateObserving:
+		lines = append(lines, "runtime status: observing before making a final oncall decision")
 	default:
-		lines = append(lines, fmt.Sprintf("runtime result: %s", phase))
+		lines = append(lines, fmt.Sprintf("runtime status: %s", req.Status.Phase))
 	}
 	return lines
 }
@@ -174,7 +207,8 @@ func classifyFocus(req *ksv1alpha1.HealingRequest, evidence Evidence, trigger st
 	if req == nil || req.Spec.Workload.Name == "" || req.Status.Phase == "" {
 		return FocusInsufficientEvidence, "core incident fields are incomplete"
 	}
-	if req.Status.Phase == ksv1alpha1.PhaseSuppressed || strings.EqualFold(strings.TrimSpace(req.Annotations["kube-sentinel.io/alert-status"]), "resolved") {
+	oncallState := TranslateOncallState(req)
+	if oncallState == OncallStateRecovered {
 		return FocusTransientRecovered, "the alert recovered during the observation window"
 	}
 	if isSafetyBlocked(req) {
@@ -186,11 +220,17 @@ func classifyFocus(req *ksv1alpha1.HealingRequest, evidence Evidence, trigger st
 	if suggestsStartupFailure(trigger, evidence) {
 		return FocusStartupFailure, "the incident looks closer to a startup failure than to a broad safety or governance issue"
 	}
-	if req.Status.Phase == ksv1alpha1.PhaseBlocked || req.Status.Phase == ksv1alpha1.PhaseL3 {
+	if oncallState == OncallStateBlocked {
 		return FocusManualFollowUp, "runtime has reached a manual follow-up boundary"
 	}
-	if req.Status.Phase == ksv1alpha1.PhaseCompleted || req.Status.Phase == ksv1alpha1.PhasePendingVerify {
-		return FocusTransientRecovered, "the workload is currently in observation or has already completed the minimal runtime path"
+	if oncallState == OncallStateObserving {
+		if suggestsStartupFailure(trigger, evidence) {
+			return FocusStartupFailure, "runtime is still observing, but the current signal looks closest to a startup failure"
+		}
+		return FocusInsufficientEvidence, "runtime is still observing and the evidence has not converged yet"
+	}
+	if oncallState == OncallStateAutoTried {
+		return FocusStartupFailure, "runtime already attempted one minimal recovery action and is now observing the workload"
 	}
 	return FocusInsufficientEvidence, "the available inputs are not sufficient to narrow the issue further"
 }
@@ -292,6 +332,7 @@ func nextStepsFor(req *ksv1alpha1.HealingRequest, focus Focus) []string {
 }
 
 func buildHandoff(req *ksv1alpha1.HealingRequest, focus Focus) string {
+	oncallState := TranslateOncallState(req)
 	timestamp := "unknown-time"
 	if !req.CreationTimestamp.IsZero() {
 		timestamp = req.CreationTimestamp.UTC().Format(time.RFC3339)
@@ -304,6 +345,7 @@ func buildHandoff(req *ksv1alpha1.HealingRequest, focus Focus) string {
 	if trigger != "" {
 		parts = append(parts, fmt.Sprintf("trigger: %s", trigger))
 	}
+	parts = append(parts, fmt.Sprintf("oncall state: %s", oncallState))
 	parts = append(parts, fmt.Sprintf("focus: %s", focus))
 	if req.Status.LastAction != "" {
 		parts = append(parts, fmt.Sprintf("runtime action: %s", req.Status.LastAction))
@@ -328,6 +370,7 @@ func buildSummary(req *ksv1alpha1.HealingRequest, trigger string, focus Focus) s
 	if req.Status.Phase != "" {
 		parts = append(parts, fmt.Sprintf("phase=%s", req.Status.Phase))
 	}
+	parts = append(parts, fmt.Sprintf("oncall_state=%s", TranslateOncallState(req)))
 	if req.Status.LastAction != "" {
 		parts = append(parts, fmt.Sprintf("action=%s", req.Status.LastAction))
 	}
@@ -343,13 +386,16 @@ func buildTelegramNotification(req *ksv1alpha1.HealingRequest, trigger string, r
 	workload := fmt.Sprintf("%s/%s", req.Spec.Workload.Namespace, req.Spec.Workload.Name)
 	var short string
 	var long string
-	statusLine := fmt.Sprintf("status: %s", req.Status.Phase)
+	statusLine := fmt.Sprintf("status: %s (phase=%s)", report.OncallState, req.Status.Phase)
 	entryPoints := []string{
 		fmt.Sprintf("object: HealingRequest %s", req.Name),
 		fmt.Sprintf("trend: Grafana namespace=%s workload=%s", req.Spec.Workload.Namespace, req.Spec.Workload.Name),
 		fmt.Sprintf("precise: kubectl describe %s/%s -n %s", strings.ToLower(req.Spec.Workload.Kind), req.Spec.Workload.Name, req.Spec.Workload.Namespace),
 	}
 	switch kind {
+	case NotificationObserving:
+		short = fmt.Sprintf("[WAIT] %s observing; %s", workload, trigger)
+		long = fmt.Sprintf("[WAIT] Sentinel is observing the incident\n\n%s\n%s\ncurrent focus: %s\nnext: %s\ncorrelation: %s\nwhere next:\n- %s\n- %s\n- %s", strings.Join(report.WhatHappened, "\n"), strings.Join(report.WhatRuntimeDid, "\n"), report.CurrentFocus, strings.Join(report.NextSteps, "; "), req.Status.CorrelationKey, entryPoints[0], entryPoints[1], entryPoints[2])
 	case NotificationAutoTried:
 		short = fmt.Sprintf("[INFO] %s auto-tried; %s", workload, trigger)
 		long = fmt.Sprintf("[INFO] Sentinel auto-tried recovery\n\n%s\n%s\ncurrent focus: %s\nnext: %s\ncorrelation: %s\nwhere next:\n- %s\n- %s\n- %s", strings.Join(report.WhatHappened, "\n"), strings.Join(report.WhatRuntimeDid, "\n"), report.CurrentFocus, strings.Join(report.NextSteps, "; "), req.Status.CorrelationKey, entryPoints[0], entryPoints[1], entryPoints[2])
@@ -367,11 +413,14 @@ func notificationKindFor(req *ksv1alpha1.HealingRequest) NotificationKind {
 	if req == nil {
 		return NotificationBlocked
 	}
-	if req.Status.Phase == ksv1alpha1.PhaseSuppressed || strings.EqualFold(strings.TrimSpace(req.Annotations["kube-sentinel.io/alert-status"]), "resolved") {
+	switch TranslateOncallState(req) {
+	case OncallStateObserving:
+		return NotificationObserving
+	case OncallStateRecovered:
 		return NotificationRecovered
-	}
-	if req.Status.Phase == ksv1alpha1.PhaseCompleted && strings.Contains(req.Status.LastAction, "deployment-l1") {
+	case OncallStateAutoTried:
 		return NotificationAutoTried
+	default:
+		return NotificationBlocked
 	}
-	return NotificationBlocked
 }

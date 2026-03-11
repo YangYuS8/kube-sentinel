@@ -52,6 +52,9 @@ func TestStatusFieldTiers(t *testing.T) {
 func TestBuildReportBlockedIncident(t *testing.T) {
 	req := newRequest()
 	report := BuildReport(req, Evidence{})
+	if report.OncallState != OncallStateBlocked {
+		t.Fatalf("expected blocked oncall state, got %s", report.OncallState)
+	}
 	if report.CurrentFocus != FocusSafetyBlocked {
 		t.Fatalf("expected safety-blocked focus, got %s", report.CurrentFocus)
 	}
@@ -77,6 +80,9 @@ func TestBuildReportAutoTriedIncident(t *testing.T) {
 	req.Status.LastError = ""
 	req.Status.NextRecommendation = "continue observing post-l1 stability"
 	report := BuildReport(req, Evidence{})
+	if report.OncallState != OncallStateAutoTried {
+		t.Fatalf("expected auto-tried oncall state, got %s", report.OncallState)
+	}
 	if report.Notification.Kind != NotificationAutoTried {
 		t.Fatalf("expected auto-tried notification, got %s", report.Notification.Kind)
 	}
@@ -94,11 +100,55 @@ func TestBuildReportRecoveredIncident(t *testing.T) {
 	req.Status.LastAction = "suppressed"
 	req.Annotations["kube-sentinel.io/alert-status"] = "resolved"
 	report := BuildReport(req, Evidence{})
+	if report.OncallState != OncallStateRecovered {
+		t.Fatalf("expected recovered oncall state, got %s", report.OncallState)
+	}
 	if report.CurrentFocus != FocusTransientRecovered {
 		t.Fatalf("expected transient focus, got %s", report.CurrentFocus)
 	}
 	if report.Notification.Kind != NotificationRecovered {
 		t.Fatalf("expected recovered notification, got %s", report.Notification.Kind)
+	}
+}
+
+func TestBuildReportObservingIncident(t *testing.T) {
+	req := newRequest()
+	req.Status.Phase = ksv1alpha1.PhasePendingVerify
+	req.Status.LastAction = "pending-verify"
+	req.Status.BlockReasonCode = ""
+	req.Status.LastError = ""
+	req.Status.NextRecommendation = "continue observing soak verification until enough stable samples are collected"
+	report := BuildReport(req, Evidence{})
+	if report.OncallState != OncallStateObserving {
+		t.Fatalf("expected observing oncall state, got %s", report.OncallState)
+	}
+	if report.Notification.Kind != NotificationObserving {
+		t.Fatalf("expected observing notification, got %s", report.Notification.Kind)
+	}
+	if !strings.Contains(report.Notification.ShortMessage, "[WAIT]") {
+		t.Fatalf("expected observing short message")
+	}
+}
+
+func TestTranslateOncallState(t *testing.T) {
+	tests := []struct {
+		phase    ksv1alpha1.HealingPhase
+		expected OncallState
+	}{
+		{phase: ksv1alpha1.PhasePending, expected: OncallStateObserving},
+		{phase: ksv1alpha1.PhasePendingVerify, expected: OncallStateObserving},
+		{phase: ksv1alpha1.PhaseBlocked, expected: OncallStateBlocked},
+		{phase: ksv1alpha1.PhaseL3, expected: OncallStateBlocked},
+		{phase: ksv1alpha1.PhaseL1, expected: OncallStateAutoTried},
+		{phase: ksv1alpha1.PhaseCompleted, expected: OncallStateAutoTried},
+		{phase: ksv1alpha1.PhaseSuppressed, expected: OncallStateRecovered},
+	}
+	for _, test := range tests {
+		req := newRequest()
+		req.Status.Phase = test.phase
+		if got := TranslateOncallState(req); got != test.expected {
+			t.Fatalf("phase %s expected %s, got %s", test.phase, test.expected, got)
+		}
 	}
 }
 
